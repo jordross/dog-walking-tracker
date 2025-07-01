@@ -291,6 +291,7 @@
             <button onclick="showRestrictedAreas()" id="restrictedBtn">🚫 Show Restricted Areas</button>
             <button onclick="debugOSMData()" id="debugBtn">🔍 Debug OSM Data</button>
             <button onclick="toggleRawDataOverlay()" id="rawDataBtn">📊 Show Raw OSM Data</button>
+            <button onclick="toggleEnhancedDetection()" id="enhancedBtn">🎯 Enhanced Detection</button>
             <button onclick="clearGrid()">🧹 Clear Grid</button>
         </div>
 
@@ -367,7 +368,7 @@
             </div>
 
             <div class="keyboard-shortcuts">
-                <strong>Keyboard Shortcuts:</strong> Press <strong>1</strong> then click = Walkable | <strong>2</strong> then click = Non-walkable | <strong>3</strong> then click = Unknown | <strong>C</strong> = Clear grid | <strong>G</strong> = Generate grid | <strong>R</strong> = Toggle raw OSM data
+                <strong>Keyboard Shortcuts:</strong> Press <strong>1</strong> then click = Walkable | <strong>2</strong> then click = Non-walkable | <strong>3</strong> then click = Unknown | <strong>C</strong> = Clear grid | <strong>G</strong> = Generate grid | <strong>R</strong> = Toggle raw OSM data | <strong>E</strong> = Enhanced detection
             </div>
         </div>
     </div>
@@ -778,51 +779,70 @@ Longitude: Like -74.0060 (East/West)`;
             }
 
             const bounds = map.getBounds();
-            const northeast = bounds.getNorthEast();
-            const southwest = bounds.getSouthWest();
+            const gridSize = parseInt(document.getElementById('grid-size').value);
             
             let classifiedCount = 0;
+            
+            console.log(`\n🔍 Classification Method: ${enhancedDetectionEnabled ? 'ENHANCED GEOMETRIC INTERSECTION' : 'CENTER-POINT + RADIUS'}`);
             
             gridCells.forEach(cell => {
                 const row = parseInt(cell.dataset.row);
                 const col = parseInt(cell.dataset.col);
-                const gridSize = parseInt(document.getElementById('grid-size').value);
                 
-                // Calculate the center lat/lng of this grid cell
-                const latRange = northeast.lat - southwest.lat;
-                const lngRange = northeast.lng - southwest.lng;
+                let isWalkable, isRestricted, detectionInfo = '';
                 
-                const cellLat = southwest.lat + (latRange * (1 - (row + 0.5) / gridSize));
-                const cellLng = southwest.lng + (lngRange * (col + 0.5) / gridSize);
-                
-                // Check if this grid cell intersects with any walkable areas
-                const isWalkable = checkPointInWalkableAreas(cellLat, cellLng, osmData.elements);
-                
-                // Check for restricted areas
-                const isRestricted = checkPointInRestrictedAreas(cellLat, cellLng, osmData.elements);
+                if (enhancedDetectionEnabled) {
+                    // ENHANCED: Use geometric intersection with grid cell boundaries
+                    const cellBounds = getGridCellBounds(row, col, gridSize, bounds);
+                    
+                    const walkableResult = checkGridCellIntersectsWalkableAreas(cellBounds, osmData.elements);
+                    const restrictedResult = checkGridCellIntersectsRestrictedAreas(cellBounds, osmData.elements);
+                    
+                    isWalkable = walkableResult.intersects;
+                    isRestricted = restrictedResult.intersects;
+                    
+                    if (walkableResult.intersects) {
+                        detectionInfo = ` - intersects with ${walkableResult.feature} (${walkableResult.type})`;
+                    } else if (restrictedResult.intersects) {
+                        detectionInfo = ` - intersects with ${restrictedResult.feature} (${restrictedResult.type})`;
+                    }
+                    
+                } else {
+                    // ORIGINAL: Use center point + radius detection
+                    const latRange = bounds.getNorthEast().lat - bounds.getSouthWest().lat;
+                    const lngRange = bounds.getNorthEast().lng - bounds.getSouthWest().lng;
+                    
+                    const cellLat = bounds.getSouthWest().lat + (latRange * (1 - (row + 0.5) / gridSize));
+                    const cellLng = bounds.getSouthWest().lng + (lngRange * (col + 0.5) / gridSize);
+                    
+                    isWalkable = checkPointInWalkableAreas(cellLat, cellLng, osmData.elements);
+                    isRestricted = checkPointInRestrictedAreas(cellLat, cellLng, osmData.elements);
+                    
+                    detectionInfo = ` - center point at ${cellLat.toFixed(6)}, ${cellLng.toFixed(6)}`;
+                }
                 
                 // PRIORITY: Walkable areas take precedence over restricted areas
                 // If there's any public walkable access, the cell is considered walkable
                 if (isWalkable) {
                     cell.dataset.state = 'walkable';
                     cell.className = 'grid-cell walkable';
-                    cell.title = `Cell ${row},${col} - walkable (auto-detected)`;
+                    cell.title = `Cell ${row},${col} - walkable (${enhancedDetectionEnabled ? 'geometric' : 'radius'} detection)${detectionInfo}`;
                     classifiedCount++;
-                    console.log(`Cell ${row},${col} marked as WALKABLE at ${cellLat.toFixed(6)}, ${cellLng.toFixed(6)}`);
+                    console.log(`Cell ${row},${col} marked as WALKABLE${detectionInfo}`);
                 } else if (isRestricted) {
                     cell.dataset.state = 'restricted';
                     cell.className = 'grid-cell restricted';
-                    cell.title = `Cell ${row},${col} - restricted (auto-detected)`;
+                    cell.title = `Cell ${row},${col} - restricted (${enhancedDetectionEnabled ? 'geometric' : 'radius'} detection)${detectionInfo}`;
                     classifiedCount++;
-                    console.log(`Cell ${row},${col} marked as RESTRICTED at ${cellLat.toFixed(6)}, ${cellLng.toFixed(6)}`);
+                    console.log(`Cell ${row},${col} marked as RESTRICTED${detectionInfo}`);
                 } else {
                     cell.dataset.state = 'non-walkable';
                     cell.className = 'grid-cell non-walkable';
-                    cell.title = `Cell ${row},${col} - non-walkable (auto-detected)`;
+                    cell.title = `Cell ${row},${col} - non-walkable (${enhancedDetectionEnabled ? 'geometric' : 'radius'} detection)`;
                 }
             });
             
-            console.log(`Auto-classified ${classifiedCount} cells as walkable out of ${gridCells.length} total`);
+            console.log(`\n📊 Auto-classified ${classifiedCount} cells as walkable/restricted out of ${gridCells.length} total using ${enhancedDetectionEnabled ? 'GEOMETRIC' : 'CENTER-POINT'} detection`);
             updateStats();
         }
 
@@ -1242,6 +1262,7 @@ Longitude: Like -74.0060 (East/West)`;
         // Variables to store raw data overlays
         let rawDataLayers = [];
         let rawDataVisible = false;
+        let enhancedDetectionEnabled = false;
 
         // Toggle raw OSM data overlay on the map
         async function toggleRawDataOverlay() {
@@ -1443,6 +1464,187 @@ Longitude: Like -74.0060 (East/West)`;
             }
         }
 
+        // Toggle enhanced geometric detection
+        function toggleEnhancedDetection() {
+            enhancedDetectionEnabled = !enhancedDetectionEnabled;
+            const button = document.getElementById('enhancedBtn');
+            
+            if (enhancedDetectionEnabled) {
+                button.textContent = '🎯 Enhanced: ON';
+                button.style.background = '#22c55e';
+                console.log('✅ Enhanced geometric detection enabled - will check grid cell boundaries vs OSM geometry');
+            } else {
+                button.textContent = '🎯 Enhanced Detection';
+                button.style.background = '#4f46e5';
+                console.log('❌ Enhanced detection disabled - using center-point method');
+            }
+        }
+
+        // Calculate grid cell boundary coordinates
+        function getGridCellBounds(row, col, gridSize, bounds) {
+            const northeast = bounds.getNorthEast();
+            const southwest = bounds.getSouthWest();
+            
+            const latRange = northeast.lat - southwest.lat;
+            const lngRange = northeast.lng - southwest.lng;
+            
+            // Calculate cell boundaries (not just center)
+            const cellLatMin = southwest.lat + (latRange * (1 - (row + 1) / gridSize));
+            const cellLatMax = southwest.lat + (latRange * (1 - row / gridSize));
+            const cellLngMin = southwest.lng + (lngRange * col / gridSize);
+            const cellLngMax = southwest.lng + (lngRange * (col + 1) / gridSize);
+            
+            return {
+                north: cellLatMax,
+                south: cellLatMin,
+                east: cellLngMax,
+                west: cellLngMin,
+                center: {
+                    lat: (cellLatMin + cellLatMax) / 2,
+                    lng: (cellLngMin + cellLngMax) / 2
+                }
+            };
+        }
+
+        // Check if a line segment intersects with a rectangle (grid cell)
+        function lineIntersectsRect(x1, y1, x2, y2, rectWest, rectSouth, rectEast, rectNorth) {
+            // Check if line is completely inside rectangle
+            if (pointInRect(x1, y1, rectWest, rectSouth, rectEast, rectNorth) || 
+                pointInRect(x2, y2, rectWest, rectSouth, rectEast, rectNorth)) {
+                return true;
+            }
+            
+            // Check line intersection with each edge of rectangle
+            return (
+                lineIntersectsLine(x1, y1, x2, y2, rectWest, rectSouth, rectEast, rectSouth) || // bottom edge
+                lineIntersectsLine(x1, y1, x2, y2, rectEast, rectSouth, rectEast, rectNorth) || // right edge
+                lineIntersectsLine(x1, y1, x2, y2, rectEast, rectNorth, rectWest, rectNorth) || // top edge
+                lineIntersectsLine(x1, y1, x2, y2, rectWest, rectNorth, rectWest, rectSouth)    // left edge
+            );
+        }
+
+        // Check if point is inside rectangle
+        function pointInRect(x, y, west, south, east, north) {
+            return x >= west && x <= east && y >= south && y <= north;
+        }
+
+        // Check if two line segments intersect
+        function lineIntersectsLine(x1, y1, x2, y2, x3, y3, x4, y4) {
+            const denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+            if (Math.abs(denom) < 1e-10) return false; // parallel lines
+            
+            const t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom;
+            const u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / denom;
+            
+            return t >= 0 && t <= 1 && u >= 0 && u <= 1;
+        }
+
+        // Enhanced check for walkable areas using geometric intersection
+        function checkGridCellIntersectsWalkableAreas(cellBounds, osmElements) {
+            for (const element of osmElements) {
+                if (element.type === 'way' && element.geometry && element.geometry.length >= 2) {
+                    const tags = element.tags || {};
+                    const isRestrictedElement = tags.fee === 'yes' || tags.access === 'private' || 
+                                              tags.access === 'no' || tags.access === 'customers' ||
+                                              tags.landuse === 'military' || tags.dog === 'no';
+                    
+                    if (!isRestrictedElement) {
+                        // Check if any segment of this OSM way intersects with the grid cell
+                        for (let i = 0; i < element.geometry.length - 1; i++) {
+                            const node1 = element.geometry[i];
+                            const node2 = element.geometry[i + 1];
+                            
+                            if (lineIntersectsRect(
+                                node1.lon, node1.lat, 
+                                node2.lon, node2.lat,
+                                cellBounds.west, cellBounds.south, 
+                                cellBounds.east, cellBounds.north
+                            )) {
+                                console.log(`Geometric intersection found: ${tags.name || tags.highway || 'unnamed'} crosses grid cell`);
+                                return {
+                                    intersects: true,
+                                    feature: tags.name || tags.highway || 'unnamed feature',
+                                    type: tags.highway || tags.leisure || 'unknown'
+                                };
+                            }
+                        }
+                        
+                        // Also check if any nodes are within the cell bounds
+                        for (const node of element.geometry) {
+                            if (pointInRect(node.lon, node.lat, cellBounds.west, cellBounds.south, cellBounds.east, cellBounds.north)) {
+                                console.log(`Point intersection found: ${tags.name || tags.highway || 'unnamed'} has nodes in grid cell`);
+                                return {
+                                    intersects: true,
+                                    feature: tags.name || tags.highway || 'unnamed feature',
+                                    type: tags.highway || tags.leisure || 'unknown'
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+            return { intersects: false };
+        }
+
+        // Enhanced check for restricted areas using geometric intersection
+        function checkGridCellIntersectsRestrictedAreas(cellBounds, osmElements) {
+            for (const element of osmElements) {
+                if (element.type === 'way' && element.geometry && element.geometry.length >= 2) {
+                    const tags = element.tags || {};
+                    const isRestrictedElement = 
+                        tags.fee === 'yes' || 
+                        tags.access === 'private' || 
+                        tags.access === 'no' || 
+                        tags.access === 'customers' ||
+                        tags.landuse === 'military' || 
+                        tags.dog === 'no' ||
+                        tags.admission ||
+                        (tags.leisure === 'garden' && tags.tourism) ||
+                        (tags.tourism === 'attraction' && tags.leisure === 'garden') ||
+                        (tags.name && tags.name.toLowerCase().includes('botanical')) ||
+                        (tags.name && tags.name.toLowerCase().includes('vandusen')) ||
+                        (tags.tourism === 'zoo') ||
+                        (tags.tourism === 'museum') ||
+                        (tags.tourism === 'theme_park');
+                    
+                    if (isRestrictedElement) {
+                        // Check geometric intersection
+                        for (let i = 0; i < element.geometry.length - 1; i++) {
+                            const node1 = element.geometry[i];
+                            const node2 = element.geometry[i + 1];
+                            
+                            if (lineIntersectsRect(
+                                node1.lon, node1.lat, 
+                                node2.lon, node2.lat,
+                                cellBounds.west, cellBounds.south, 
+                                cellBounds.east, cellBounds.north
+                            )) {
+                                console.log(`Restricted area intersection found: ${tags.name || 'unnamed'} crosses grid cell`);
+                                return {
+                                    intersects: true,
+                                    feature: tags.name || 'unnamed restricted area',
+                                    type: tags.tourism || tags.leisure || 'restricted'
+                                };
+                            }
+                        }
+                        
+                        // Check if any nodes are within the cell bounds
+                        for (const node of element.geometry) {
+                            if (pointInRect(node.lon, node.lat, cellBounds.west, cellBounds.south, cellBounds.east, cellBounds.north)) {
+                                console.log(`Restricted area point found: ${tags.name || 'unnamed'} has nodes in grid cell`);
+                                return {
+                                    intersects: true,
+                                    feature: tags.name || 'unnamed restricted area',
+                                    type: tags.tourism || tags.leisure || 'restricted'
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+            return { intersects: false };
+        }
+
         // Keyboard shortcuts for easier testing
         document.addEventListener('keydown', (e) => {
             if (e.key.toLowerCase() === 'c') {
@@ -1455,6 +1657,10 @@ Longitude: Like -74.0060 (East/West)`;
             }
             if (e.key.toLowerCase() === 'r') {
                 toggleRawDataOverlay();
+                e.preventDefault();
+            }
+            if (e.key.toLowerCase() === 'e') {
+                toggleEnhancedDetection();
                 e.preventDefault();
             }
         });
