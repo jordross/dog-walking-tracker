@@ -269,10 +269,12 @@
             <div class="control-group">
                 <label for="grid-size">Grid Size:</label>
                 <select id="grid-size">
-                    <option value="10">10x10</option>
-                    <option value="15" selected>15x15</option>
+                    <option value="15">15x15</option>
                     <option value="20">20x20</option>
-                    <option value="25">25x25</option>
+                    <option value="25" selected>25x25</option>
+                    <option value="30">30x30</option>
+                    <option value="40">40x40</option>
+                    <option value="50">50x50</option>
                 </select>
             </div>
             
@@ -536,16 +538,34 @@ Longitude: Like -74.0060 (East/West)`;
             gridOverlay.innerHTML = '';
             gridCells = [];
 
-            const cellSize = 100 / gridSize; // Percentage size of each cell
+            if (!map) {
+                alert('Please load the map first!');
+                return;
+            }
+
+            // Get the actual map container dimensions
+            const mapContainer = map.getContainer();
+            const containerWidth = mapContainer.clientWidth;
+            const containerHeight = mapContainer.clientHeight;
+            
+            // Use the smaller dimension to ensure square cells that fit in the view
+            const smallerDimension = Math.min(containerWidth, containerHeight);
+            const cellPixelSize = smallerDimension / gridSize;
+            
+            // Calculate offsets to center the grid
+            const leftOffset = (containerWidth - smallerDimension) / 2;
+            const topOffset = (containerHeight - smallerDimension) / 2;
 
             for (let row = 0; row < gridSize; row++) {
                 for (let col = 0; col < gridSize; col++) {
                     const cell = document.createElement('div');
                     cell.className = 'grid-cell unknown';
-                    cell.style.left = `${col * cellSize}%`;
-                    cell.style.top = `${row * cellSize}%`;
-                    cell.style.width = `${cellSize}%`;
-                    cell.style.height = `${cellSize}%`;
+                    
+                    // Position cells as perfect squares using pixel dimensions
+                    cell.style.left = `${leftOffset + (col * cellPixelSize)}px`;
+                    cell.style.top = `${topOffset + (row * cellPixelSize)}px`;
+                    cell.style.width = `${cellPixelSize}px`;
+                    cell.style.height = `${cellPixelSize}px`;
                     
                     cell.dataset.row = row;
                     cell.dataset.col = col;
@@ -562,11 +582,11 @@ Longitude: Like -74.0060 (East/West)`;
             }
 
             updateStats();
-            console.log(`Generated ${gridSize}x${gridSize} grid (${gridCells.length} cells)`);
+            console.log(`Generated ${gridSize}x${gridSize} SQUARE grid (${gridCells.length} cells, ${cellPixelSize.toFixed(1)}px each)`);
             
             // Show success message
             const originalText = event.target.textContent;
-            event.target.textContent = `✅ ${gridCells.length} cells created!`;
+            event.target.textContent = `✅ ${gridCells.length} square cells created!`;
             setTimeout(() => {
                 event.target.textContent = originalText;
             }, 2000);
@@ -576,7 +596,7 @@ Longitude: Like -74.0060 (East/West)`;
             const currentState = cell.dataset.state;
             let newState;
             
-            // Cycle through states: unknown -> walkable -> non-walkable -> unknown
+            // Cycle through states: unknown -> walkable -> non-walkable -> restricted -> unknown
             switch (currentState) {
                 case 'unknown':
                     newState = 'walkable';
@@ -585,6 +605,9 @@ Longitude: Like -74.0060 (East/West)`;
                     newState = 'non-walkable';
                     break;
                 case 'non-walkable':
+                    newState = 'restricted';
+                    break;
+                case 'restricted':
                     newState = 'unknown';
                     break;
                 default:
@@ -816,9 +839,22 @@ Longitude: Like -74.0060 (East/West)`;
                         // Check proximity to walkable infrastructure
                         for (const node of element.geometry) {
                             const distance = calculateDistance(pointLat, pointLng, node.lat, node.lon);
-                            // If within 30 meters of a walkable way, consider it walkable
-                            // (accounts for sidewalks, nearby roads, etc.)
-                            if (distance < 30) {
+                            
+                            // Different detection radii based on infrastructure type
+                            let detectionRadius = 30; // Default 30m
+                            
+                            if (tags.highway === 'footway' || tags.highway === 'pedestrian') {
+                                detectionRadius = 20; // Footways and pedestrian areas
+                            } else if (tags.highway === 'residential' || tags.highway === 'service') {
+                                detectionRadius = 50; // Residential streets (likely have sidewalks)
+                            } else if (tags.highway && tags.highway.match(/^(primary|secondary|tertiary)$/)) {
+                                detectionRadius = 60; // Major roads (wider with sidewalks)
+                            } else if (tags.leisure === 'park') {
+                                detectionRadius = 40; // Parks
+                            }
+                            
+                            if (distance < detectionRadius) {
+                                console.log(`Found walkable: ${tags.name || tags.highway || 'unnamed'} at ${distance.toFixed(1)}m (radius: ${detectionRadius}m)`);
                                 return true;
                             }
                         }
