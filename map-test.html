@@ -2962,41 +2962,244 @@ Longitude: Like -74.0060 (East/West)`;
             return blocks;
         }
         
-        // Build a graph of connected road segments
+        // Build a graph of connected road segments with intersection detection
         function buildRoadGraph(polylines) {
             const graph = new Map();
-            const tolerance = 0.00005; // ~5 meters tolerance for connecting endpoints
+            const tolerance = 0.0001; // ~10 meters tolerance for intersections
             
-            polylines.forEach(polyline => {
+            // First, find all intersection points between segments
+            const intersections = findAllIntersections(polylines, tolerance);
+            console.log(`🔗 Found ${intersections.length} intersection points`);
+            
+            // Create nodes for all intersection points
+            intersections.forEach((intersection, index) => {
+                const key = getPointKey(intersection.point);
+                if (!graph.has(key)) {
+                    graph.set(key, {
+                        point: intersection.point,
+                        connections: [],
+                        isIntersection: true,
+                        segments: intersection.segments
+                    });
+                }
+            });
+            
+            // Connect segments through their intersection points
+            polylines.forEach((polyline, polylineIndex) => {
                 const coords = polyline.getLatLngs();
-                const startPoint = coords[0];
-                const endPoint = coords[coords.length - 1];
-                
-                const startKey = getPointKey(startPoint);
-                const endKey = getPointKey(endPoint);
-                
-                // Add all coordinate points of this road segment
                 const roadPoints = coords.map(coord => ({lat: coord.lat, lng: coord.lng}));
                 
-                // Connect start and end points in the graph
-                if (!graph.has(startKey)) graph.set(startKey, {point: startPoint, connections: []});
-                if (!graph.has(endKey)) graph.set(endKey, {point: endPoint, connections: []});
-                
-                // Add bidirectional connection with the road points
-                graph.get(startKey).connections.push({
-                    to: endKey,
-                    roadPoints: roadPoints,
-                    polyline: polyline
+                // Find which intersections this polyline passes through
+                const segmentIntersections = intersections.filter(int => 
+                    int.segments.includes(polylineIndex)
+                ).sort((a, b) => {
+                    // Sort by position along the polyline
+                    const distA = getDistanceAlongPolyline(roadPoints, a.point);
+                    const distB = getDistanceAlongPolyline(roadPoints, b.point);
+                    return distA - distB;
                 });
                 
-                graph.get(endKey).connections.push({
-                    to: startKey, 
-                    roadPoints: [...roadPoints].reverse(), // Reverse for opposite direction
-                    polyline: polyline
-                });
+                // Connect consecutive intersection points along this polyline
+                for (let i = 0; i < segmentIntersections.length - 1; i++) {
+                    const fromKey = getPointKey(segmentIntersections[i].point);
+                    const toKey = getPointKey(segmentIntersections[i + 1].point);
+                    
+                    if (graph.has(fromKey) && graph.has(toKey)) {
+                        // Get the road points between these intersections
+                        const fromDist = getDistanceAlongPolyline(roadPoints, segmentIntersections[i].point);
+                        const toDist = getDistanceAlongPolyline(roadPoints, segmentIntersections[i + 1].point);
+                        const segmentPoints = getPointsBetweenDistances(roadPoints, fromDist, toDist);
+                        
+                        // Add bidirectional connections
+                        graph.get(fromKey).connections.push({
+                            to: toKey,
+                            roadPoints: segmentPoints,
+                            polyline: polyline
+                        });
+                        
+                        graph.get(toKey).connections.push({
+                            to: fromKey,
+                            roadPoints: [...segmentPoints].reverse(),
+                            polyline: polyline
+                        });
+                    }
+                }
             });
             
             return graph;
+        }
+        
+        // Find all intersection points between polylines
+        function findAllIntersections(polylines, tolerance) {
+            const intersections = [];
+            
+            for (let i = 0; i < polylines.length; i++) {
+                for (let j = i + 1; j < polylines.length; j++) {
+                    const intersectionPoints = findPolylineIntersections(
+                        polylines[i].getLatLngs(),
+                        polylines[j].getLatLngs(),
+                        tolerance
+                    );
+                    
+                    intersectionPoints.forEach(point => {
+                        // Check if this intersection already exists
+                        const existing = intersections.find(int => 
+                            Math.abs(int.point.lat - point.lat) < tolerance &&
+                            Math.abs(int.point.lng - point.lng) < tolerance
+                        );
+                        
+                        if (existing) {
+                            existing.segments.push(i, j);
+                        } else {
+                            intersections.push({
+                                point: point,
+                                segments: [i, j]
+                            });
+                        }
+                    });
+                }
+            }
+            
+            return intersections;
+        }
+        
+        // Find intersection points between two polylines
+        function findPolylineIntersections(coords1, coords2, tolerance) {
+            const intersections = [];
+            
+            // Check each segment of polyline1 against each segment of polyline2
+            for (let i = 0; i < coords1.length - 1; i++) {
+                for (let j = 0; j < coords2.length - 1; j++) {
+                    const intersection = lineSegmentIntersection(
+                        coords1[i], coords1[i + 1],
+                        coords2[j], coords2[j + 1],
+                        tolerance
+                    );
+                    
+                    if (intersection) {
+                        intersections.push(intersection);
+                    }
+                }
+            }
+            
+            return intersections;
+        }
+        
+        // Find intersection between two line segments
+        function lineSegmentIntersection(p1, p2, p3, p4, tolerance) {
+            const x1 = p1.lng, y1 = p1.lat;
+            const x2 = p2.lng, y2 = p2.lat;
+            const x3 = p3.lng, y3 = p3.lat;
+            const x4 = p4.lng, y4 = p4.lat;
+            
+            const denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+            if (Math.abs(denom) < 1e-10) return null; // Lines are parallel
+            
+            const t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom;
+            const u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / denom;
+            
+            // Check if intersection is within both line segments (with tolerance)
+            if (t >= -tolerance && t <= 1 + tolerance && u >= -tolerance && u <= 1 + tolerance) {
+                return {
+                    lat: y1 + t * (y2 - y1),
+                    lng: x1 + t * (x2 - x1)
+                };
+            }
+            
+            return null;
+        }
+        
+        // Get distance along polyline to a point
+        function getDistanceAlongPolyline(roadPoints, targetPoint) {
+            let totalDistance = 0;
+            let closestDistance = Infinity;
+            let result = 0;
+            
+            for (let i = 0; i < roadPoints.length - 1; i++) {
+                const segmentStart = roadPoints[i];
+                const segmentEnd = roadPoints[i + 1];
+                
+                // Check distance from target point to this segment
+                const distance = pointToLineDistance(targetPoint, segmentStart, segmentEnd);
+                
+                if (distance < closestDistance) {
+                    closestDistance = distance;
+                    result = totalDistance + pointDistanceAlongSegment(targetPoint, segmentStart, segmentEnd);
+                }
+                
+                totalDistance += calculateDistance(segmentStart.lat, segmentStart.lng, segmentEnd.lat, segmentEnd.lng);
+            }
+            
+            return result;
+        }
+        
+        // Get points between two distances along a polyline
+        function getPointsBetweenDistances(roadPoints, startDist, endDist) {
+            const result = [];
+            let currentDistance = 0;
+            
+            for (let i = 0; i < roadPoints.length - 1; i++) {
+                const segmentStart = roadPoints[i];
+                const segmentEnd = roadPoints[i + 1];
+                const segmentLength = calculateDistance(segmentStart.lat, segmentStart.lng, segmentEnd.lat, segmentEnd.lng);
+                
+                if (currentDistance + segmentLength >= startDist && currentDistance <= endDist) {
+                    if (result.length === 0) result.push(segmentStart);
+                    result.push(segmentEnd);
+                }
+                
+                currentDistance += segmentLength;
+                if (currentDistance > endDist) break;
+            }
+            
+            return result;
+        }
+        
+        // Distance from point to line segment
+        function pointToLineDistance(point, lineStart, lineEnd) {
+            const A = point.lng - lineStart.lng;
+            const B = point.lat - lineStart.lat;
+            const C = lineEnd.lng - lineStart.lng;
+            const D = lineEnd.lat - lineStart.lat;
+            
+            const dot = A * C + B * D;
+            const lenSq = C * C + D * D;
+            
+            if (lenSq === 0) return Math.sqrt(A * A + B * B);
+            
+            const param = dot / lenSq;
+            
+            let closestPoint;
+            if (param < 0) {
+                closestPoint = lineStart;
+            } else if (param > 1) {
+                closestPoint = lineEnd;
+            } else {
+                closestPoint = {
+                    lng: lineStart.lng + param * C,
+                    lat: lineStart.lat + param * D
+                };
+            }
+            
+            const dx = point.lng - closestPoint.lng;
+            const dy = point.lat - closestPoint.lat;
+            return Math.sqrt(dx * dx + dy * dy);
+        }
+        
+        // Distance along segment to closest point
+        function pointDistanceAlongSegment(point, segmentStart, segmentEnd) {
+            const A = point.lng - segmentStart.lng;
+            const B = point.lat - segmentStart.lat;
+            const C = segmentEnd.lng - segmentStart.lng;
+            const D = segmentEnd.lat - segmentStart.lat;
+            
+            const dot = A * C + B * D;
+            const lenSq = C * C + D * D;
+            
+            if (lenSq === 0) return 0;
+            
+            const param = Math.max(0, Math.min(1, dot / lenSq));
+            return param * Math.sqrt(lenSq) * 111000; // Convert to meters approximately
         }
         
         // Find closed loops in the road graph
