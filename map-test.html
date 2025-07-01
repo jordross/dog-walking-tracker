@@ -290,6 +290,7 @@
             <button onclick="autoDetectWalkable()" id="autoDetectBtn">🤖 Auto-Detect Walkable Areas</button>
             <button onclick="showRestrictedAreas()" id="restrictedBtn">🚫 Show Restricted Areas</button>
             <button onclick="debugOSMData()" id="debugBtn">🔍 Debug OSM Data</button>
+            <button onclick="toggleRawDataOverlay()" id="rawDataBtn">📊 Show Raw OSM Data</button>
             <button onclick="clearGrid()">🧹 Clear Grid</button>
         </div>
 
@@ -366,7 +367,7 @@
             </div>
 
             <div class="keyboard-shortcuts">
-                <strong>Keyboard Shortcuts:</strong> Press <strong>1</strong> then click = Walkable | <strong>2</strong> then click = Non-walkable | <strong>3</strong> then click = Unknown | <strong>C</strong> = Clear grid | <strong>G</strong> = Generate grid
+                <strong>Keyboard Shortcuts:</strong> Press <strong>1</strong> then click = Walkable | <strong>2</strong> then click = Non-walkable | <strong>3</strong> then click = Unknown | <strong>C</strong> = Clear grid | <strong>G</strong> = Generate grid | <strong>R</strong> = Toggle raw OSM data
             </div>
         </div>
     </div>
@@ -1238,6 +1239,210 @@ Longitude: Like -74.0060 (East/West)`;
             return R * c; // Distance in meters
         }
 
+        // Variables to store raw data overlays
+        let rawDataLayers = [];
+        let rawDataVisible = false;
+
+        // Toggle raw OSM data overlay on the map
+        async function toggleRawDataOverlay() {
+            if (!map) {
+                alert('Please load the map first!');
+                return;
+            }
+
+            const button = document.getElementById('rawDataBtn');
+            
+            if (rawDataVisible) {
+                // Remove existing overlays
+                clearRawDataOverlays();
+                button.textContent = '📊 Show Raw OSM Data';
+                rawDataVisible = false;
+                return;
+            }
+
+            const originalText = button.textContent;
+            button.textContent = '🔍 Loading OSM data...';
+            button.disabled = true;
+
+            try {
+                const center = map.getCenter();
+                const radius = parseInt(document.getElementById('radius').value);
+                
+                console.log('Loading raw OSM data for visualization...');
+                
+                // Get both walkable and restricted areas data
+                const [walkableData, restrictedData, specialData] = await Promise.all([
+                    queryWalkableAreas(center.lat, center.lng, radius),
+                    queryRestrictedAreas(center.lat, center.lng, radius),
+                    querySpecialAreas(center.lat, center.lng, radius)
+                ]);
+                
+                // Create overlays for different types of data
+                if (walkableData?.elements) {
+                    createDataOverlay(walkableData.elements, 'walkable', '#22c55e', 'Walkable areas from OSM');
+                }
+                
+                if (restrictedData?.elements) {
+                    createDataOverlay(restrictedData.elements, 'restricted', '#ef4444', 'Restricted areas from OSM');
+                }
+                
+                if (specialData?.elements) {
+                    createDataOverlay(specialData.elements, 'special', '#a855f7', 'Special areas (gardens, tourism)');
+                }
+                
+                button.textContent = '✅ Raw data visible';
+                rawDataVisible = true;
+                
+                // Add legend for raw data
+                showRawDataLegend();
+                
+            } catch (error) {
+                console.error('Error loading raw data:', error);
+                button.textContent = '❌ Failed to load';
+            }
+            
+            setTimeout(() => {
+                if (rawDataVisible) {
+                    button.textContent = '🗑️ Hide Raw OSM Data';
+                }
+                button.disabled = false;
+            }, 2000);
+        }
+
+        // Create overlay for specific data type
+        function createDataOverlay(elements, type, color, description) {
+            const layerGroup = L.layerGroup();
+            let addedFeatures = 0;
+            
+            elements.forEach((element, index) => {
+                if (element.type === 'way' && element.geometry) {
+                    const coordinates = element.geometry.map(node => [node.lat, node.lon]);
+                    
+                    if (coordinates.length >= 2) {
+                        const tags = element.tags || {};
+                        const name = tags.name || `Unnamed ${type} feature`;
+                        
+                        // Create polyline for ways
+                        const polyline = L.polyline(coordinates, {
+                            color: color,
+                            weight: 3,
+                            opacity: 0.7
+                        });
+                        
+                        // Create popup with detailed information
+                        const tagsList = Object.entries(tags)
+                            .map(([key, value]) => `<strong>${key}:</strong> ${value}`)
+                            .join('<br>');
+                        
+                        polyline.bindPopup(`
+                            <div style="max-width: 300px;">
+                                <h4 style="margin: 0 0 8px 0; color: ${color};">${name}</h4>
+                                <p style="margin: 0 0 8px 0; font-size: 12px; color: #666;">
+                                    ${description} • ID: ${element.id}
+                                </p>
+                                <div style="max-height: 200px; overflow-y: auto; font-size: 11px;">
+                                    ${tagsList}
+                                </div>
+                            </div>
+                        `);
+                        
+                        layerGroup.addLayer(polyline);
+                        addedFeatures++;
+                    }
+                } else if (element.type === 'relation' && element.members) {
+                    // Handle relations (like parks that are relations)
+                    const tags = element.tags || {};
+                    const name = tags.name || `Unnamed ${type} relation`;
+                    
+                    // For relations, we'll just show a marker at the center if we can calculate it
+                    // This is simplified - in reality, you'd need to resolve the relation members
+                    if (element.center) {
+                        const marker = L.circleMarker([element.center.lat, element.center.lon], {
+                            color: color,
+                            fillColor: color,
+                            fillOpacity: 0.5,
+                            radius: 8
+                        });
+                        
+                        const tagsList = Object.entries(tags)
+                            .map(([key, value]) => `<strong>${key}:</strong> ${value}`)
+                            .join('<br>');
+                        
+                        marker.bindPopup(`
+                            <div style="max-width: 300px;">
+                                <h4 style="margin: 0 0 8px 0; color: ${color};">${name}</h4>
+                                <p style="margin: 0 0 8px 0; font-size: 12px; color: #666;">
+                                    ${description} (Relation) • ID: ${element.id}
+                                </p>
+                                <div style="max-height: 200px; overflow-y: auto; font-size: 11px;">
+                                    ${tagsList}
+                                </div>
+                            </div>
+                        `);
+                        
+                        layerGroup.addLayer(marker);
+                        addedFeatures++;
+                    }
+                }
+            });
+            
+            if (addedFeatures > 0) {
+                layerGroup.addTo(map);
+                rawDataLayers.push(layerGroup);
+                console.log(`Added ${addedFeatures} ${type} features to map`);
+            } else {
+                console.log(`No ${type} features found to display`);
+            }
+        }
+
+        // Clear all raw data overlays
+        function clearRawDataOverlays() {
+            rawDataLayers.forEach(layer => {
+                map.removeLayer(layer);
+            });
+            rawDataLayers = [];
+            hideRawDataLegend();
+        }
+
+        // Show legend for raw data overlays
+        function showRawDataLegend() {
+            // Remove existing raw data legend if it exists
+            hideRawDataLegend();
+            
+            const legendDiv = document.createElement('div');
+            legendDiv.id = 'raw-data-legend';
+            legendDiv.innerHTML = `
+                <div style="position: absolute; top: 10px; right: 10px; background: white; padding: 12px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.3); z-index: 1000; font-size: 12px; min-width: 200px;">
+                    <h4 style="margin: 0 0 8px 0; color: #1f2937;">🗺️ Raw OSM Data</h4>
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+                        <div style="width: 16px; height: 3px; background: #22c55e;"></div>
+                        <span>Walkable areas</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+                        <div style="width: 16px; height: 3px; background: #ef4444;"></div>
+                        <span>Restricted areas</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                        <div style="width: 16px; height: 3px; background: #a855f7;"></div>
+                        <span>Special areas</span>
+                    </div>
+                    <div style="font-size: 10px; color: #666; border-top: 1px solid #eee; padding-top: 6px;">
+                        Click any line/marker for details
+                    </div>
+                </div>
+            `;
+            
+            document.querySelector('.map-container').appendChild(legendDiv);
+        }
+
+        // Hide raw data legend
+        function hideRawDataLegend() {
+            const legend = document.getElementById('raw-data-legend');
+            if (legend) {
+                legend.remove();
+            }
+        }
+
         // Keyboard shortcuts for easier testing
         document.addEventListener('keydown', (e) => {
             if (e.key.toLowerCase() === 'c') {
@@ -1246,6 +1451,10 @@ Longitude: Like -74.0060 (East/West)`;
             }
             if (e.key.toLowerCase() === 'g') {
                 generateGrid();
+                e.preventDefault();
+            }
+            if (e.key.toLowerCase() === 'r') {
+                toggleRawDataOverlay();
                 e.preventDefault();
             }
         });
