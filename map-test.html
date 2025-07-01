@@ -1949,16 +1949,23 @@ Longitude: Like -74.0060 (East/West)`;
 
         // Render all walkable segments as interactive polylines
         async function renderWalkableSegments() {
-            const center = map.getCenter();
-            const bounds = map.getBounds();
-            const radius = calculateRadius(bounds);
-            
-            console.log(`Loading walkable segments within ${radius}m of ${center.lat.toFixed(6)}, ${center.lng.toFixed(6)}`);
-            
-            // Get OSM data for walkable areas
-            const osmData = await queryWalkableAreas(center.lat, center.lng, radius);
-            if (!osmData || !osmData.elements) {
-                throw new Error('Failed to load OSM data');
+            try {
+                const center = map.getCenter();
+                const bounds = map.getBounds();
+                const radius = calculateRadius(bounds);
+                
+                console.log(`Loading walkable segments within ${radius}m of ${center.lat.toFixed(6)}, ${center.lng.toFixed(6)}`);
+                
+                // Get OSM data for walkable areas
+                const osmData = await queryWalkableAreas(center.lat, center.lng, radius);
+                if (!osmData || !osmData.elements) {
+                    throw new Error('Failed to load OSM data - no elements received');
+                }
+                
+                console.log(`Received ${osmData.elements.length} OSM elements for segment processing`);
+            } catch (error) {
+                console.error('Error in renderWalkableSegments:', error);
+                throw error;
             }
             
             // Clear existing segment overlays
@@ -1978,68 +1985,79 @@ Longitude: Like -74.0060 (East/West)`;
             });
             
             for (const element of osmData.elements) {
-                if (element.type === 'way' && element.geometry && element.geometry.length >= 2) {
-                    const tags = element.tags || {};
-                    
-                    // Skip restricted elements
-                    const isRestrictedElement = tags.fee === 'yes' || tags.access === 'private' || 
-                                              tags.access === 'no' || tags.access === 'customers' ||
-                                              tags.landuse === 'military' || tags.dog === 'no';
-                    
-                    if (isRestrictedElement) continue;
-                    
-                    // Skip paths near restricted areas (VanDusen fix)
-                    const isNearRestrictedArea = checkIfPathNearRestrictedAreas(element, restrictedAreas);
-                    if (isNearRestrictedArea) continue;
-                    
-                    // Create polyline for this segment
-                    const coordinates = element.geometry.map(node => [node.lat, node.lon]);
-                    const segmentId = `segment_${element.id}`;
-                    
-                    // Determine segment type and color
-                    let color = '#94a3b8'; // Default gray (not walked)
-                    let weight = 4;
-                    let opacity = 0.8;
-                    
-                    if (walkedSegments.has(segmentId)) {
-                        // This segment has been "walked"
-                        if (tags.highway === 'footway' || tags.highway === 'path' || tags.highway === 'pedestrian') {
-                            color = '#22c55e'; // Green for paths/footways
-                        } else if (tags.highway && tags.highway.match(/^(primary|secondary|tertiary|residential)$/)) {
-                            color = '#3b82f6'; // Blue for roads
-                        } else if (tags.leisure === 'park') {
-                            color = '#10b981'; // Emerald for parks
-                        } else {
-                            color = '#8b5cf6'; // Purple for other walkable areas
+                try {
+                    if (element.type === 'way' && element.geometry && element.geometry.length >= 2) {
+                        const tags = element.tags || {};
+                        
+                        // Skip restricted elements
+                        const isRestrictedElement = tags.fee === 'yes' || tags.access === 'private' || 
+                                                  tags.access === 'no' || tags.access === 'customers' ||
+                                                  tags.landuse === 'military' || tags.dog === 'no';
+                        
+                        if (isRestrictedElement) continue;
+                        
+                        // Skip paths near restricted areas (VanDusen fix)
+                        const isNearRestrictedArea = checkIfPathNearRestrictedAreas(element, restrictedAreas);
+                        if (isNearRestrictedArea) continue;
+                        
+                        // Create polyline for this segment
+                        const coordinates = element.geometry.map(node => [node.lat, node.lon]);
+                        const segmentId = `segment_${element.id}`;
+                        
+                        // Validate coordinates
+                        if (coordinates.length < 2) {
+                            console.log(`Skipping segment ${segmentId} - insufficient coordinates`);
+                            continue;
                         }
-                        weight = 6;
-                        opacity = 1.0;
+                        
+                        // Determine segment type and color
+                        let color = '#94a3b8'; // Default gray (not walked)
+                        let weight = 4;
+                        let opacity = 0.8;
+                        
+                        if (walkedSegments.has(segmentId)) {
+                            // This segment has been "walked"
+                            if (tags.highway === 'footway' || tags.highway === 'path' || tags.highway === 'pedestrian') {
+                                color = '#22c55e'; // Green for paths/footways
+                            } else if (tags.highway && tags.highway.match(/^(primary|secondary|tertiary|residential)$/)) {
+                                color = '#3b82f6'; // Blue for roads
+                            } else if (tags.leisure === 'park') {
+                                color = '#10b981'; // Emerald for parks
+                            } else {
+                                color = '#8b5cf6'; // Purple for other walkable areas
+                            }
+                            weight = 6;
+                            opacity = 1.0;
+                        }
+                        
+                        const polyline = L.polyline(coordinates, {
+                            color: color,
+                            weight: weight,
+                            opacity: opacity,
+                            lineJoin: 'round',
+                            lineCap: 'round'
+                        });
+                        
+                        // Add click handler to mark as walked
+                        polyline.on('click', () => {
+                            markSegmentAsWalked(segmentId, polyline, tags);
+                        });
+                        
+                        // Add tooltip
+                        const name = tags.name || tags.highway || 'Unnamed segment';
+                        const walked = walkedSegments.has(segmentId) ? ' (WALKED)' : ' (click to mark as walked)';
+                        polyline.bindTooltip(`${name}${walked}`, {
+                            sticky: true,
+                            direction: 'top'
+                        });
+                        
+                        polyline.addTo(map);
+                        segmentLayers.push(polyline);
+                        segmentCount++;
                     }
-                    
-                    const polyline = L.polyline(coordinates, {
-                        color: color,
-                        weight: weight,
-                        opacity: opacity,
-                        lineJoin: 'round',
-                        lineCap: 'round'
-                    });
-                    
-                    // Add click handler to mark as walked
-                    polyline.on('click', () => {
-                        markSegmentAsWalked(segmentId, polyline, tags);
-                    });
-                    
-                    // Add tooltip
-                    const name = tags.name || tags.highway || 'Unnamed segment';
-                    const walked = walkedSegments.has(segmentId) ? ' (WALKED)' : ' (click to mark as walked)';
-                    polyline.bindTooltip(`${name}${walked}`, {
-                        sticky: true,
-                        direction: 'top'
-                    });
-                    
-                    polyline.addTo(map);
-                    segmentLayers.push(polyline);
-                    segmentCount++;
+                } catch (segmentError) {
+                    console.log(`Error processing segment ${element.id}:`, segmentError);
+                    // Continue with next segment
                 }
             }
             
@@ -2113,6 +2131,22 @@ Longitude: Like -74.0060 (East/West)`;
                 map.removeLayer(layer);
             });
             segmentLayers = [];
+        }
+
+        // Calculate appropriate radius for OSM queries based on map bounds
+        function calculateRadius(bounds) {
+            const northeast = bounds.getNorthEast();
+            const southwest = bounds.getSouthWest();
+            
+            // Calculate diagonal distance of the visible area
+            const distance = calculateDistance(
+                southwest.lat, southwest.lng,
+                northeast.lat, northeast.lng
+            );
+            
+            // Return radius as half the diagonal, with min/max bounds
+            const radius = Math.max(500, Math.min(5000, Math.round(distance * 500))); // 500m to 5km
+            return radius;
         }
 
         // Keyboard shortcuts for easier testing
