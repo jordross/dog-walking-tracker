@@ -302,6 +302,7 @@
             <button id="clearBlocksBtn" onclick="clearBlockFills()" style="background-color: #dc2626; color: white; border: none; padding: 10px 15px; margin: 5px; border-radius: 5px; cursor: pointer;">🗑️ Clear Blocks</button>
             <button id="debugBlocksBtn" onclick="debugBlockDetection()" style="background-color: #8b5cf6; color: white; border: none; padding: 10px 15px; margin: 5px; border-radius: 5px; cursor: pointer;">🔍 Debug Blocks</button>
             <button id="debugConnectionsBtn" onclick="toggleConnectionsDebug()" style="background-color: #ef4444; color: white; border: none; padding: 10px 15px; margin: 5px; border-radius: 5px; cursor: pointer;">🔗 Debug Connections</button>
+            <button id="debugAllBlocksBtn" onclick="debugAllBlocks()" style="background-color: #f59e0b; color: white; border: none; padding: 10px 15px; margin: 5px; border-radius: 5px; cursor: pointer;">🔍 Debug All Blocks</button>
         </div>
 
         <div class="map-container">
@@ -390,6 +391,8 @@
         let currentState = 'walkable'; // Current classification mode
         let debugConnectionsMode = false; // Debug mode for visualizing segment connections
         let debugConnectionLines = []; // Store debug connection lines
+        let allDetectedBlocks = []; // Store all detected blocks for debugging
+        let debugBlockLayers = []; // Store debug block visualization layers
 
         // Sample coordinates (New York City) - user will replace with their location
         const defaultCoords = { lat: 40.7128, lng: -74.0060 };
@@ -3210,6 +3213,9 @@ Longitude: Like -74.0060 (East/West)`;
         function detectSimpleBlocks(polylines, center, radius) {
             const blocks = [];
             
+            // Reset debug storage
+            allDetectedBlocks = [];
+            
             console.log(`🔧 Building ENHANCED road graph from ${polylines.length} polylines`);
             
             // Build enhanced graph that includes both endpoint connections AND intersections
@@ -4014,8 +4020,15 @@ Longitude: Like -74.0060 (East/West)`;
             completedBlocks.clear();
             totalCompletedArea = 0; // Reset area tracking
             
-            // Also clear debug connections when clearing blocks
+            // Also clear debug connections and debug blocks when clearing blocks
             clearDebugConnections();
+            
+            // Clear debug block layers
+            debugBlockLayers.forEach(layer => {
+                map.removeLayer(layer);
+            });
+            debugBlockLayers = [];
+            allDetectedBlocks = [];
             
             updateBlockAreaStats(); // Update display
             console.log('🗑️ Cleared all completed blocks and reset area tracking');
@@ -4169,6 +4182,68 @@ Longitude: Like -74.0060 (East/West)`;
             }
             
             console.log(`📊 Area Stats: ${totalCompletedArea}m² completed (${completionPercentage}% of ~${estimatedTotalArea}m² total)`);
+        }
+
+        // Debug all detected blocks with color coding
+        function debugAllBlocks() {
+            console.log(`🔍 Debug: Found ${allDetectedBlocks.length} total blocks`);
+            
+            // Clear existing debug layers
+            debugBlockLayers.forEach(layer => {
+                map.removeLayer(layer);
+            });
+            debugBlockLayers = [];
+            
+            if (allDetectedBlocks.length === 0) {
+                console.log('⚠️ No blocks detected yet. Run "🔍 Debug Blocks" first.');
+                return;
+            }
+            
+            // Visualize all detected blocks with different colors
+            allDetectedBlocks.forEach((blockInfo, index) => {
+                const { polygon, area, valid } = blockInfo;
+                
+                // Color coding based on area validity
+                let color, opacity, description;
+                if (valid) {
+                    color = '#22c55e'; // Green for valid blocks
+                    opacity = 0.6;
+                    description = `Valid block: ${area.toFixed(0)}m²`;
+                } else if (area < 500) {
+                    color = '#fbbf24'; // Yellow for too small
+                    opacity = 0.4;
+                    description = `Too small: ${area.toFixed(0)}m² (< 500m²)`;
+                } else {
+                    color = '#ef4444'; // Red for too large
+                    opacity = 0.4;
+                    description = `Too large: ${area.toFixed(0)}m² (> 100,000m²)`;
+                }
+                
+                // Create polygon layer
+                const polygon_layer = L.polygon(polygon, {
+                    color: color,
+                    fillColor: color,
+                    fillOpacity: opacity,
+                    weight: 2
+                }).addTo(map);
+                
+                // Add popup with details
+                polygon_layer.bindPopup(`
+                    <b>Detected Block #${index + 1}</b><br/>
+                    ${description}<br/>
+                    Intersection nodes: ${blockInfo.intersectionNodes}<br/>
+                    Polygon points: ${polygon.length}
+                `);
+                
+                debugBlockLayers.push(polygon_layer);
+                
+                console.log(`🔍 Block #${index + 1}: ${description}`);
+            });
+            
+            console.log(`🎨 Visualized ${allDetectedBlocks.length} blocks:`);
+            console.log(`   🟢 Green = Valid (500-100,000m²)`);
+            console.log(`   🟡 Yellow = Too small (< 500m²)`);
+            console.log(`   🔴 Red = Too large (> 100,000m²)`);
         }
 
         // Toggle debug visualization of segment connections
@@ -4509,6 +4584,15 @@ Longitude: Like -74.0060 (East/West)`;
                             // Check if this loop creates a reasonable polygon
                             const area = calculatePolygonArea(fullPolygonCoords);
                             console.log(`🔧 Full polygon has ${fullPolygonCoords.length} coordinates, area: ${area.toFixed(0)}m²`);
+                            
+                            // Store ALL detected blocks for debugging, regardless of area
+                            const blockInfo = {
+                                polygon: fullPolygonCoords,
+                                area: area,
+                                intersectionNodes: loop.length,
+                                valid: area >= 500 && area <= 100000
+                            };
+                            allDetectedBlocks.push(blockInfo);
                             
                             if (area >= 500 && area <= 100000) { // 500m² to 10 hectares
                                 loops.push(fullPolygonCoords);
