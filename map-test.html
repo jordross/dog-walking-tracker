@@ -301,6 +301,7 @@
             <button onclick="clearGrid()">🧹 Clear Grid</button>
             <button id="clearBlocksBtn" onclick="clearBlockFills()" style="background-color: #dc2626; color: white; border: none; padding: 10px 15px; margin: 5px; border-radius: 5px; cursor: pointer;">🗑️ Clear Blocks</button>
             <button id="debugBlocksBtn" onclick="debugBlockDetection()" style="background-color: #8b5cf6; color: white; border: none; padding: 10px 15px; margin: 5px; border-radius: 5px; cursor: pointer;">🔍 Debug Blocks</button>
+            <button id="debugConnectionsBtn" onclick="toggleConnectionsDebug()" style="background-color: #ef4444; color: white; border: none; padding: 10px 15px; margin: 5px; border-radius: 5px; cursor: pointer;">🔗 Debug Connections</button>
         </div>
 
         <div class="map-container">
@@ -387,6 +388,8 @@
         let map = null;
         let gridCells = [];
         let currentState = 'walkable'; // Current classification mode
+        let debugConnectionsMode = false; // Debug mode for visualizing segment connections
+        let debugConnectionLines = []; // Store debug connection lines
 
         // Sample coordinates (New York City) - user will replace with their location
         const defaultCoords = { lat: 40.7128, lng: -74.0060 };
@@ -4004,6 +4007,10 @@ Longitude: Like -74.0060 (East/West)`;
             blockFillLayers = [];
             completedBlocks.clear();
             totalCompletedArea = 0; // Reset area tracking
+            
+            // Also clear debug connections when clearing blocks
+            clearDebugConnections();
+            
             updateBlockAreaStats(); // Update display
             console.log('🗑️ Cleared all completed blocks and reset area tracking');
         }
@@ -4156,6 +4163,159 @@ Longitude: Like -74.0060 (East/West)`;
             }
             
             console.log(`📊 Area Stats: ${totalCompletedArea}m² completed (${completionPercentage}% of ~${estimatedTotalArea}m² total)`);
+        }
+
+        // Toggle debug visualization of segment connections
+        function toggleConnectionsDebug() {
+            debugConnectionsMode = !debugConnectionsMode;
+            const button = document.getElementById('debugConnectionsBtn');
+            
+            if (debugConnectionsMode) {
+                button.textContent = '🔗 Hide Connections';
+                button.style.backgroundColor = '#dc2626'; // darker red when active
+                console.log('🔗 Debug connections mode: ON');
+                
+                // If we have segment layers, rebuild with debug visualization
+                if (segmentLayers.length > 0) {
+                    rebuildWithConnectionDebug();
+                }
+            } else {
+                button.textContent = '🔗 Debug Connections';
+                button.style.backgroundColor = '#ef4444'; // original red
+                console.log('🔗 Debug connections mode: OFF');
+                
+                // Clear existing debug lines
+                clearDebugConnections();
+            }
+        }
+
+        // Clear all debug connection lines
+        function clearDebugConnections() {
+            debugConnectionLines.forEach(line => {
+                if (map.hasLayer(line)) {
+                    map.removeLayer(line);
+                }
+            });
+            debugConnectionLines = [];
+        }
+
+        // Rebuild segment data with connection debug visualization
+        function rebuildWithConnectionDebug() {
+            console.log('🔧 Rebuilding segment connections with debug visualization...');
+            
+            // Get center and radius
+            const center = map.getCenter();
+            const radius = getRadiusFromInput();
+            
+            // Find completed segments to work with
+            const completedSegments = segmentLayers.filter(layer => {
+                const segmentId = layer.options.segmentId;
+                const walkData = walkedSegments.get(segmentId);
+                return walkData && walkData.completed;
+            });
+            
+            if (completedSegments.length < 2) {
+                console.log('⚠️ Need at least 2 completed segments to show connections');
+                return;
+            }
+            
+            // Build connection graph and visualize
+            console.log(`🔧 Building connection graph for ${completedSegments.length} completed segments...`);
+            const graph = buildSmartConnectionGraphWithDebug(completedSegments);
+            
+            console.log(`🔗 Debug mode: Created ${debugConnectionLines.length} connection visualizations`);
+        }
+
+        // Modified version of buildSmartConnectionGraph that adds debug visualization
+        function buildSmartConnectionGraphWithDebug(polylines) {
+            const graph = new Map();
+            const tolerance = 0.0002; // ~22 meters tolerance for endpoint connections
+            
+            console.log(`🔧 Building DEBUG connection graph with ${(tolerance * 111000).toFixed(1)}m tolerance`);
+            
+            // Create nodes for all endpoints
+            polylines.forEach((polyline, index) => {
+                const latLngs = polyline.getLatLngs();
+                const start = latLngs[0];
+                const end = latLngs[latLngs.length - 1];
+                
+                const startKey = `${start.lat.toFixed(6)},${start.lng.toFixed(6)}`;
+                const endKey = `${end.lat.toFixed(6)},${end.lng.toFixed(6)}`;
+                
+                if (!graph.has(startKey)) {
+                    graph.set(startKey, {
+                        lat: start.lat,
+                        lng: start.lng,
+                        connections: [],
+                        segmentIndices: []
+                    });
+                }
+                
+                if (!graph.has(endKey)) {
+                    graph.set(endKey, {
+                        lat: end.lat,
+                        lng: end.lng,
+                        connections: [],
+                        segmentIndices: []
+                    });
+                }
+                
+                graph.get(startKey).segmentIndices.push(index);
+                graph.get(endKey).segmentIndices.push(index);
+            });
+            
+            // Find connections between nearby endpoints
+            const nodes = Array.from(graph.entries());
+            let connectionCount = 0;
+            
+            for (let i = 0; i < nodes.length; i++) {
+                for (let j = i + 1; j < nodes.length; j++) {
+                    const [keyA, nodeA] = nodes[i];
+                    const [keyB, nodeB] = nodes[j];
+                    
+                    const distance = Math.sqrt(
+                        Math.pow((nodeA.lat - nodeB.lat) * 111000, 2) +
+                        Math.pow((nodeA.lng - nodeB.lng) * 111000 * Math.cos(nodeA.lat * Math.PI / 180), 2)
+                    );
+                    
+                    if (distance <= tolerance * 111000) {
+                        // Connect these endpoints
+                        nodeA.connections.push(keyB);
+                        nodeB.connections.push(keyA);
+                        connectionCount++;
+                        
+                        console.log(`✅ Connected endpoints ${distance.toFixed(1)}m apart`);
+                        
+                        // ADD DEBUG VISUALIZATION HERE
+                        if (debugConnectionsMode) {
+                            const debugLine = L.polyline([
+                                [nodeA.lat, nodeA.lng],
+                                [nodeB.lat, nodeB.lng]
+                            ], {
+                                color: '#dc2626', // Red color for debug connections
+                                weight: 4,
+                                opacity: 0.8,
+                                dashArray: '10, 5', // Dashed line to distinguish from segments
+                                interactive: false
+                            }).addTo(map);
+                            
+                            // Add tooltip showing connection details
+                            debugLine.bindTooltip(`🔗 Connection<br/>Distance: ${distance.toFixed(1)}m<br/>Tolerance: ${(tolerance * 111000).toFixed(1)}m`, {
+                                sticky: true,
+                                direction: 'center',
+                                opacity: 0.9
+                            });
+                            
+                            debugConnectionLines.push(debugLine);
+                        }
+                    }
+                }
+            }
+            
+            console.log(`🔧 Created ${graph.size} endpoint nodes with ${connectionCount} connections (${(tolerance * 111000).toFixed(1)}m tolerance)`);
+            console.log(`🔗 Added ${debugConnectionLines.length} debug connection lines to map`);
+            
+            return graph;
         }
 
     </script>
