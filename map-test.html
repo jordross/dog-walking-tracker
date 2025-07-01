@@ -3218,7 +3218,7 @@ Longitude: Like -74.0060 (East/West)`;
             console.log(`🔧 Enhanced road graph has ${roadGraph.size} nodes`);
             
             // Find closed loops in the enhanced road graph
-            const loops = findEnhancedClosedLoops(roadGraph);
+            const loops = findEnhancedClosedLoops(roadGraph, polylines);
             
             console.log(`🔧 Found ${loops.length} closed loops`);
             
@@ -4474,7 +4474,7 @@ Longitude: Like -74.0060 (East/West)`;
         }
 
         // Enhanced loop detection that works with intersection-based graph
-        function findEnhancedClosedLoops(graph) {
+        function findEnhancedClosedLoops(graph, polylines) {
             const loops = [];
             const visited = new Set();
             
