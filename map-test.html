@@ -3127,45 +3127,273 @@ Longitude: Like -74.0060 (East/West)`;
             return blockCandidates;
         }
         
-        // Advanced polygon detection algorithm - traces actual block shapes
+        // Advanced polygon detection algorithm - works with smart segments
         function detectSimpleBlocks(polylines, center, radius) {
             const blocks = [];
             
-            console.log(`🔧 Building road graph from ${polylines.length} polylines`);
+            console.log(`🔧 Smart block detection from ${polylines.length} completed segments`);
             
-            // Build a graph of connected road segments
-            const roadGraph = buildRoadGraph(polylines);
+            // Build a simplified connection graph based on segment endpoints
+            const connectionGraph = buildSmartConnectionGraph(polylines);
             
-            console.log(`🔧 Road graph has ${roadGraph.size} nodes`);
+            console.log(`🔧 Connection graph has ${connectionGraph.size} endpoint nodes`);
             
-            // Find closed loops in the road graph (actual block shapes)
-            const loops = findClosedLoops(roadGraph);
+            // Find closed loops using endpoint connections
+            const loops = findSmartClosedLoops(connectionGraph, polylines);
             
-            console.log(`🔧 Found ${loops.length} closed loops`);
+            console.log(`🔧 Found ${loops.length} potential block loops`);
             
             // Convert valid loops into block polygons
             loops.forEach((loop, index) => {
-                if (loop.length >= 3) { // Need at least 3 points for a polygon
-                    const blockId = `block_${Date.now()}_${index}`;
-                    const polygon = createPolygonFromLoop(loop);
+                if (loop.length >= 3) {
+                    const blockId = `smart_block_${Date.now()}_${index}`;
+                    const polygon = createPolygonFromSmartLoop(loop, polylines);
                     
                     if (polygon && isValidBlockSize(polygon)) {
-                        console.log(`✅ Valid block created: ${blockId}, area: ${calculatePolygonArea(polygon)}m²`);
+                        const area = calculatePolygonArea(polygon);
+                        console.log(`✅ Smart block created: ${blockId}, area: ${area.toFixed(0)}m²`);
                         blocks.push({
                             id: blockId,
                             polygon: polygon,
-                            area: calculatePolygonArea(polygon),
-                            isActualShape: true // Flag to indicate this is a real shape, not a rectangle
+                            area: area,
+                            isActualShape: true
                         });
                     } else {
-                        console.log(`❌ Invalid block: ${blockId}, area: ${polygon ? calculatePolygonArea(polygon) : 'no polygon'}m²`);
+                        console.log(`❌ Invalid smart block: ${blockId}`);
                     }
                 }
             });
             
-            console.log(`🔧 Final blocks array has ${blocks.length} valid blocks`);
-            
+            console.log(`🔧 Final smart blocks: ${blocks.length} valid blocks`);
             return blocks;
+        }
+
+        // Build a simplified connection graph based on segment endpoints
+        function buildSmartConnectionGraph(polylines) {
+            const graph = new Map();
+            const tolerance = 0.00008; // ~8 meters tolerance for endpoint connections
+            
+            console.log(`🔧 Building connection graph with ${tolerance * 111000}m tolerance`);
+            
+            // Add all segment endpoints as potential nodes
+            polylines.forEach((polyline, index) => {
+                const coords = polyline.getLatLngs();
+                if (coords.length >= 2) {
+                    const startPoint = {lat: coords[0].lat, lng: coords[0].lng};
+                    const endPoint = {lat: coords[coords.length - 1].lat, lng: coords[coords.length - 1].lng};
+                    
+                    // Add start point
+                    const startKey = getPointKey(startPoint);
+                    if (!graph.has(startKey)) {
+                        graph.set(startKey, {
+                            point: startPoint,
+                            connections: [],
+                            segments: []
+                        });
+                    }
+                    graph.get(startKey).segments.push({index, isStart: true, coords});
+                    
+                    // Add end point
+                    const endKey = getPointKey(endPoint);
+                    if (!graph.has(endKey)) {
+                        graph.set(endKey, {
+                            point: endPoint,
+                            connections: [],
+                            segments: []
+                        });
+                    }
+                    graph.get(endKey).segments.push({index, isStart: false, coords});
+                }
+            });
+            
+            // Find connections between nearby endpoints
+            const graphNodes = Array.from(graph.values());
+            for (let i = 0; i < graphNodes.length; i++) {
+                for (let j = i + 1; j < graphNodes.length; j++) {
+                    const nodeA = graphNodes[i];
+                    const nodeB = graphNodes[j];
+                    
+                    const distance = calculateDistance(
+                        nodeA.point.lat, nodeA.point.lng,
+                        nodeB.point.lat, nodeB.point.lng
+                    );
+                    
+                    if (distance <= tolerance * 111000) { // Convert to meters
+                        // Connect these endpoints
+                        const keyA = getPointKey(nodeA.point);
+                        const keyB = getPointKey(nodeB.point);
+                        
+                        nodeA.connections.push(keyB);
+                        nodeB.connections.push(keyA);
+                    }
+                }
+            }
+            
+            console.log(`🔧 Created ${graph.size} nodes with ${Array.from(graph.values()).reduce((sum, node) => sum + node.connections.length, 0) / 2} connections`);
+            return graph;
+        }
+
+        // Find closed loops using smart endpoint connections
+        function findSmartClosedLoops(graph, polylines) {
+            const loops = [];
+            const visited = new Set();
+            
+            // Try to find loops starting from each node
+            for (const [startKey, startNode] of graph) {
+                if (visited.has(startKey) || startNode.connections.length < 2) continue;
+                
+                // Use depth-first search to find loops back to start
+                const path = [startKey];
+                const loop = findLoopFromNode(graph, startKey, startKey, path, visited, 8); // Max 8 segments per block
+                
+                if (loop && loop.length >= 3 && loop.length <= 8) {
+                    loops.push(loop);
+                    // Mark all nodes in this loop as visited to avoid duplicates
+                    loop.forEach(nodeKey => visited.add(nodeKey));
+                }
+            }
+            
+            return loops;
+        }
+
+        // Recursive function to find a loop back to start node
+        function findLoopFromNode(graph, startKey, currentKey, path, globalVisited, maxDepth) {
+            if (path.length > maxDepth) return null; // Prevent infinite loops
+            
+            const currentNode = graph.get(currentKey);
+            if (!currentNode) return null;
+            
+            // Check all connections from current node
+            for (const nextKey of currentNode.connections) {
+                if (path.length > 2 && nextKey === startKey) {
+                    // Found a loop back to start!
+                    return [...path];
+                }
+                
+                if (!path.includes(nextKey)) {
+                    // Continue exploring this path
+                    const newPath = [...path, nextKey];
+                    const result = findLoopFromNode(graph, startKey, nextKey, newPath, globalVisited, maxDepth);
+                    if (result) return result;
+                }
+            }
+            
+            return null;
+        }
+
+        // Create polygon from smart loop of connected segments
+        function createPolygonFromSmartLoop(nodeKeys, polylines) {
+            const polygonPoints = [];
+            const tolerance = 0.00008;
+            
+            try {
+                // For each pair of consecutive nodes, find the segment that connects them
+                for (let i = 0; i < nodeKeys.length; i++) {
+                    const currentKey = nodeKeys[i];
+                    const nextKey = nodeKeys[(i + 1) % nodeKeys.length];
+                    
+                    // Find the polyline segment that connects these two points
+                    const connectingSegment = findConnectingSegment(currentKey, nextKey, polylines, tolerance);
+                    
+                    if (connectingSegment) {
+                        // Add the points along this segment to our polygon
+                        const segmentPoints = getOrderedSegmentPoints(connectingSegment, currentKey, nextKey);
+                        
+                        // Add points (skip first point if it duplicates the last added point)
+                        if (polygonPoints.length === 0 || !pointsAreClose(polygonPoints[polygonPoints.length - 1], segmentPoints[0], tolerance)) {
+                            polygonPoints.push(segmentPoints[0]);
+                        }
+                        
+                        // Add intermediate points
+                        for (let j = 1; j < segmentPoints.length - 1; j++) {
+                            polygonPoints.push(segmentPoints[j]);
+                        }
+                    } else {
+                        console.warn(`❌ No connecting segment found between ${currentKey} and ${nextKey}`);
+                        return null;
+                    }
+                }
+                
+                if (polygonPoints.length >= 3) {
+                    // Close the polygon by ensuring first and last points are the same
+                    if (!pointsAreClose(polygonPoints[0], polygonPoints[polygonPoints.length - 1], tolerance)) {
+                        polygonPoints.push(polygonPoints[0]);
+                    }
+                    
+                    console.log(`📐 Created polygon with ${polygonPoints.length} points from ${nodeKeys.length} connected segments`);
+                    return polygonPoints;
+                }
+                
+            } catch (error) {
+                console.error('Error creating polygon from smart loop:', error);
+            }
+            
+            return null;
+        }
+
+        // Find the polyline segment that connects two endpoint nodes
+        function findConnectingSegment(keyA, keyB, polylines, tolerance) {
+            const pointA = parsePointKey(keyA);
+            const pointB = parsePointKey(keyB);
+            
+            // Find a polyline that has both points as endpoints
+            for (const polyline of polylines) {
+                const coords = polyline.getLatLngs();
+                if (coords.length < 2) continue;
+                
+                const start = {lat: coords[0].lat, lng: coords[0].lng};
+                const end = {lat: coords[coords.length - 1].lat, lng: coords[coords.length - 1].lng};
+                
+                const startToA = calculateDistance(start.lat, start.lng, pointA.lat, pointA.lng);
+                const startToB = calculateDistance(start.lat, start.lng, pointB.lat, pointB.lng);
+                const endToA = calculateDistance(end.lat, end.lng, pointA.lat, pointA.lng);
+                const endToB = calculateDistance(end.lat, end.lng, pointB.lat, pointB.lng);
+                
+                const toleranceM = tolerance * 111000; // Convert to meters
+                
+                // Check if this segment connects the two points
+                if ((startToA <= toleranceM && endToB <= toleranceM) || (startToB <= toleranceM && endToA <= toleranceM)) {
+                    return polyline;
+                }
+            }
+            
+            return null;
+        }
+
+        // Get ordered points along a segment from point A to point B
+        function getOrderedSegmentPoints(polyline, keyA, keyB) {
+            const coords = polyline.getLatLngs();
+            const pointA = parsePointKey(keyA);
+            const pointB = parsePointKey(keyB);
+            const tolerance = 0.00008;
+            
+            const start = {lat: coords[0].lat, lng: coords[0].lng};
+            const end = {lat: coords[coords.length - 1].lat, lng: coords[coords.length - 1].lng};
+            
+            const startToA = calculateDistance(start.lat, start.lng, pointA.lat, pointA.lng);
+            const endToB = calculateDistance(end.lat, end.lng, pointB.lat, pointB.lng);
+            
+            const toleranceM = tolerance * 111000;
+            
+            if (startToA <= toleranceM && endToB <= toleranceM) {
+                // A is at start, B is at end - return points in order
+                return coords.map(coord => ({lat: coord.lat, lng: coord.lng}));
+            } else {
+                // B is at start, A is at end - return points in reverse order
+                return coords.slice().reverse().map(coord => ({lat: coord.lat, lng: coord.lng}));
+            }
+        }
+
+        // Helper function to parse point key back to coordinates
+        function parsePointKey(key) {
+            const [lat, lng] = key.split(',').map(Number);
+            return {lat, lng};
+        }
+
+        // Helper function to check if two points are close
+        function pointsAreClose(pointA, pointB, tolerance) {
+            const distance = calculateDistance(pointA.lat, pointA.lng, pointB.lat, pointB.lng);
+            return distance <= tolerance * 111000; // Convert tolerance to meters
         }
         
         // Build a graph of connected road segments with intersection detection
