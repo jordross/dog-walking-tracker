@@ -2038,6 +2038,7 @@ Longitude: Like -74.0060 (East/West)`;
             const center = map.getCenter();
             const radius = getRadiusFromInput(); // Use actual input radius instead of map bounds
             
+            console.log(`🚀 DEBUG: renderWalkableSegments() called!`);
             console.log(`Loading walkable segments within ${radius}m of ${center.lat.toFixed(6)}, ${center.lng.toFixed(6)}`);
             
             // Get OSM data for walkable areas
@@ -2992,7 +2993,7 @@ Longitude: Like -74.0060 (East/West)`;
                         
                         if (!hasPointInRadius) continue;
                         
-                        // Create single segment per way (simplified)
+                        // Create single segment per way (simplified) - THIS IS THE PROBLEM!
                         const segmentId = `simple_${element.id}`;
                         
                         // Calculate length
@@ -3004,48 +3005,72 @@ Longitude: Like -74.0060 (East/West)`;
                             );
                         }
                         
-                        // Visual style for simplified approach
-                        let color = '#94a3b8'; // Gray (not walked)
-                        let weight = isPark ? 6 : 8; // Parks slightly thinner
+                        console.log(`🔧 SIMPLIFIED: Creating single segment: ${segmentLength.toFixed(1)}m (${tags.name || 'unnamed'})`);
                         
-                        const walkData = walkedSegments.get(segmentId);
-                        if (walkData && walkData.completed) {
-                            if (isRoad) {
-                                color = '#3b82f6'; // Blue for completed roads
-                                weight = 10; // Thick when completed
-                            } else if (isPark) {
-                                color = '#10b981'; // Emerald for discovered parks
-                                weight = 8;
+                        // FIX: If segment is too long, subdivide it  
+                        const segments = segmentLength > 60 ? 
+                            subdivideSegmentByDistance(coordinates, 45) : // Subdivide long segments
+                            [coordinates]; // Keep short segments as-is
+                        
+                        console.log(`🔧 SIMPLIFIED: Subdivided into ${segments.length} segments`);
+                        
+                        // Create polylines for each subdivision
+                        for (let i = 0; i < segments.length; i++) {
+                            const segCoords = segments[i];
+                            const subSegmentId = segments.length > 1 ? `${segmentId}_${i}` : segmentId;
+                            
+                            // Recalculate length for subdivision
+                            let subSegmentLength = 0;
+                            for (let j = 1; j < segCoords.length; j++) {
+                                subSegmentLength += calculateDistance(
+                                    segCoords[j-1][0], segCoords[j-1][1],
+                                    segCoords[j][0], segCoords[j][1]
+                                );
                             }
+                        
+                            // Visual style for simplified approach
+                            let color = '#94a3b8'; // Gray (not walked)
+                            let weight = isPark ? 6 : 8; // Parks slightly thinner
+                            
+                            const walkData = walkedSegments.get(subSegmentId);
+                            if (walkData && walkData.completed) {
+                                if (isRoad) {
+                                    color = '#3b82f6'; // Blue for completed roads
+                                    weight = 10; // Thick when completed
+                                } else if (isPark) {
+                                    color = '#10b981'; // Emerald for discovered parks
+                                    weight = 8;
+                                }
+                            }
+                            
+                            const polyline = L.polyline(segCoords, {
+                                color: color,
+                                weight: weight,
+                                opacity: 0.9,
+                                lineJoin: 'round',
+                                lineCap: 'round',
+                                segmentId: subSegmentId,
+                                segmentLength: subSegmentLength
+                            });
+                            
+                            // Click to complete
+                            polyline.on('click', () => {
+                                markSegmentAsWalkedWithBlockCheck(subSegmentId, polyline, tags);
+                            });
+                            
+                            // Tooltip
+                            const name = tags.name || (isRoad ? 'Street' : 'Park');
+                            const type = isRoad ? '🛣️ Road' : '🏞️ Park';
+                            const status = walkData && walkData.completed ? '✅ Explored' : '⬜ Not explored';
+                            
+                            polyline.bindTooltip(`${type} ${name} [${Math.round(subSegmentLength)}m] ${status}`, {
+                                sticky: true,
+                                direction: 'top'
+                            });
+                            
+                            polyline.addTo(map);
+                            segmentLayers.push(polyline);
                         }
-                        
-                        const polyline = L.polyline(coordinates, {
-                            color: color,
-                            weight: weight,
-                            opacity: 0.9,
-                            lineJoin: 'round',
-                            lineCap: 'round',
-                            segmentId: segmentId,
-                            segmentLength: segmentLength
-                        });
-                        
-                        // Click to complete
-                        polyline.on('click', () => {
-                            markSegmentAsWalkedWithBlockCheck(segmentId, polyline, tags);
-                        });
-                        
-                        // Tooltip
-                        const name = tags.name || (isRoad ? 'Street' : 'Park');
-                        const type = isRoad ? '🛣️ Road' : '🏞️ Park';
-                        const status = walkData && walkData.completed ? '✅ Explored' : '⬜ Not explored';
-                        
-                        polyline.bindTooltip(`${type} ${name} [${Math.round(segmentLength)}m] ${status}`, {
-                            sticky: true,
-                            direction: 'top'
-                        });
-                        
-                        polyline.addTo(map);
-                        segmentLayers.push(polyline);
                     }
                 }
                 
