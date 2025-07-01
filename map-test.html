@@ -289,12 +289,13 @@
             <button onclick="generateGrid()">⬜ Generate Grid</button>
             <button onclick="autoDetectWalkable()" id="autoDetectBtn">🤖 Auto-Detect Walkable Areas</button>
             <button onclick="showRestrictedAreas()" id="restrictedBtn">🚫 Show Restricted Areas</button>
-            <button onclick="debugOSMData()" id="debugBtn">🔍 Debug OSM Data</button>
+            <button id="testWalkBtn" onclick="startTestWalk()">Start Test Walk</button>
+            <button id="debugBtn" onclick="debugOSMData()">Debug OSM Data</button>
             <button onclick="toggleRawDataOverlay()" id="rawDataBtn">📊 Show Raw OSM Data</button>
             <button onclick="toggleEnhancedDetection()" id="enhancedBtn">🎯 Enhanced Detection</button>
             <button onclick="debugSpecificCell()" id="debugCellBtn">🔬 Debug Cell Intersection</button>
             <button onclick="toggleSegmentMode()" id="segmentBtn">🛣️ Segment Mode (Prototype)</button>
-            <button onclick="startTestWalk()" id="testWalkBtn">🚶‍♂️ Test Walk Simulation</button>
+            <button id="gameBtn" onclick="toggleGameMode()" style="background: #9333ea; color: white;">🎮 Simple Game Mode</button>
             <button onclick="clearGrid()">🧹 Clear Grid</button>
         </div>
 
@@ -1296,7 +1297,7 @@ Longitude: Like -74.0060 (East/West)`;
         // Segment mode variables
         let segmentMode = false;
         let segmentLayers = [];
-        let walkedSegments = new Map(); // segmentId -> {progress: number, completed: boolean, touchPoints: array} // Store IDs of segments that have been "walked"
+        let walkedSegments = new Map(); // segmentId -> {progress: 0-100, completed: false}
         let subSegments = []; // Store subdivided segments for granular tracking
         
         // Test walk variables
@@ -1305,6 +1306,14 @@ Longitude: Like -74.0060 (East/West)`;
         let testWalkPath = [];
         let testWalkTimer = null;
         let testWalkIndex = 0;
+        let testWalker = null;
+        let isWalking = false;
+
+        // Gamification tracking
+        let discoveredParks = new Set(); // Park IDs that have been visited
+        let completedBlocks = new Set(); // Block IDs that have been completed (walked around)
+        let parkMarkers = []; // Park discovery markers
+        let blockPolygons = []; // Completed block polygons
 
         // Toggle raw OSM data overlay on the map
         async function toggleRawDataOverlay() {
@@ -2682,6 +2691,197 @@ Longitude: Like -74.0060 (East/West)`;
         console.log('⌨️ Keyboard shortcuts: C=clear, G=generate');
         console.log('');
         console.log('This test simulates how your dog walking app would analyze walkable areas!');
+
+        // === SIMPLIFIED GAMIFICATION SYSTEM ===
+        // Simplified approach: Roads with sidewalks + Parks for discovery
+        
+        // Modify the segment button to use simplified rendering
+        document.getElementById('segmentBtn').onclick = function() {
+            if (segmentMode) {
+                clearSegmentOverlays();
+                this.textContent = '🗺️ Segment Mode: OFF';
+                this.style.backgroundColor = '#6b7280';
+                segmentMode = false;
+                console.log('Segment mode disabled');
+            } else {
+                renderSimplifiedGameSegments(); // Use new simplified function
+                this.textContent = '🗺️ Segment Mode: ON';
+                this.style.backgroundColor = '#10b981';
+                segmentMode = true;
+                console.log('Simplified gamification mode enabled');
+            }
+        };
+
+        // New simplified segment rendering for gamification
+        async function renderSimplifiedGameSegments() {
+            const center = map.getCenter();
+            const radius = getRadiusFromInput();
+            
+            console.log(`🎮 Loading simplified gamification segments within ${radius}m`);
+            
+            try {
+                // Get OSM data
+                const osmData = await queryWalkableAreas(center.lat, center.lng, radius);
+                if (!osmData || !osmData.elements) {
+                    throw new Error('Failed to load OSM data');
+                }
+                
+                clearSegmentOverlays();
+                
+                // Track different types for stats
+                let roadSegments = 0;
+                let parkSegments = 0;
+                let filteredOut = 0;
+                
+                // Process each element with simplified logic
+                for (const element of osmData.elements) {
+                    if (element.type === 'way' && element.geometry && element.geometry.length >= 2) {
+                        const tags = element.tags || {};
+                        
+                        // SIMPLIFIED CATEGORIZATION - Only roads with sidewalks + parks
+                        const isRoad = tags.highway && tags.highway.match(/^(primary|secondary|tertiary|residential|unclassified)$/);
+                        const isPark = tags.leisure === 'park' || tags.leisure === 'recreation_ground' || 
+                                      tags.landuse === 'recreation_ground' || tags.leisure === 'playground';
+                        
+                        // Skip restricted areas
+                        if (tags.fee === 'yes' || tags.access === 'private' || tags.access === 'no') {
+                            continue;
+                        }
+                        
+                        // FLIPPED LOGIC: Only include roads that HAVE sidewalks
+                        if (isRoad) {
+                            if (!hasNearbySidewalk(element)) {
+                                filteredOut++;
+                                continue; // Skip roads without sidewalks
+                            }
+                            roadSegments++;
+                        } else if (isPark) {
+                            parkSegments++;
+                            // Add park discovery logic here if desired
+                        } else {
+                            continue; // Only roads-with-sidewalks and parks
+                        }
+                        
+                        // Check if within radius
+                        const coordinates = element.geometry.map(node => [node.lat, node.lon]);
+                        const hasPointInRadius = coordinates.some(coord => {
+                            const distance = calculateDistance(center.lat, center.lng, coord[0], coord[1]);
+                            return distance <= radius;
+                        });
+                        
+                        if (!hasPointInRadius) continue;
+                        
+                        // Create single segment per way (simplified)
+                        const segmentId = `simple_${element.id}`;
+                        
+                        // Calculate length
+                        let segmentLength = 0;
+                        for (let i = 1; i < coordinates.length; i++) {
+                            segmentLength += calculateDistance(
+                                coordinates[i-1][0], coordinates[i-1][1],
+                                coordinates[i][0], coordinates[i][1]
+                            );
+                        }
+                        
+                        // Visual style for simplified approach
+                        let color = '#94a3b8'; // Gray (not walked)
+                        let weight = isPark ? 6 : 8; // Parks slightly thinner
+                        
+                        const walkData = walkedSegments.get(segmentId);
+                        if (walkData && walkData.completed) {
+                            if (isRoad) {
+                                color = '#3b82f6'; // Blue for completed roads
+                                weight = 10; // Thick when completed
+                            } else if (isPark) {
+                                color = '#10b981'; // Emerald for discovered parks
+                                weight = 8;
+                            }
+                        }
+                        
+                        const polyline = L.polyline(coordinates, {
+                            color: color,
+                            weight: weight,
+                            opacity: 0.9,
+                            lineJoin: 'round',
+                            lineCap: 'round',
+                            segmentId: segmentId,
+                            segmentLength: segmentLength
+                        });
+                        
+                        // Click to complete
+                        polyline.on('click', () => {
+                            const walkData = walkedSegments.get(segmentId) || {progress: 0, completed: false};
+                            walkData.completed = !walkData.completed;
+                            walkData.progress = walkData.completed ? 100 : 0;
+                            walkedSegments.set(segmentId, walkData);
+                            
+                            // Update visual
+                            if (walkData.completed) {
+                                polyline.setStyle({
+                                    color: isRoad ? '#3b82f6' : '#10b981',
+                                    weight: isRoad ? 10 : 8
+                                });
+                            } else {
+                                polyline.setStyle({
+                                    color: '#94a3b8',
+                                    weight: isPark ? 6 : 8
+                                });
+                            }
+                            
+                            updateSegmentStats();
+                        });
+                        
+                        // Tooltip
+                        const name = tags.name || (isRoad ? 'Street' : 'Park');
+                        const type = isRoad ? '🛣️ Road' : '🏞️ Park';
+                        const status = walkData && walkData.completed ? '✅ Explored' : '⬜ Not explored';
+                        
+                        polyline.bindTooltip(`${type} ${name} [${Math.round(segmentLength)}m] ${status}`, {
+                            sticky: true,
+                            direction: 'top'
+                        });
+                        
+                        polyline.addTo(map);
+                        segmentLayers.push(polyline);
+                    }
+                }
+                
+                console.log(`🎮 Simplified gamification loaded: ${roadSegments} roads with sidewalks, ${parkSegments} parks`);
+                console.log(`🚫 Filtered out ${filteredOut} roads without sidewalks`);
+                updateSegmentStats();
+                
+            } catch (error) {
+                console.error('Error loading simplified segments:', error);
+                alert('Failed to load gamification segments. Please try again.');
+            }
+        }
+
+        // Toggle between complex and simplified gamification modes
+        function toggleGameMode() {
+            const gameBtn = document.getElementById('gameBtn');
+            const segmentBtn = document.getElementById('segmentBtn');
+            
+            if (segmentMode) {
+                // Already in segment mode, just switch to simplified
+                clearSegmentOverlays();
+                renderSimplifiedGameSegments();
+                gameBtn.textContent = '🎮 Simple Game Mode: ON';
+                gameBtn.style.backgroundColor = '#10b981';
+                segmentBtn.textContent = '🛣️ Segment Mode: OFF';
+                segmentBtn.style.backgroundColor = '#6b7280';
+                console.log('Switched to simplified gamification mode');
+            } else {
+                // Enable simplified mode
+                renderSimplifiedGameSegments();
+                segmentMode = true;
+                gameBtn.textContent = '🎮 Simple Game Mode: ON';
+                gameBtn.style.backgroundColor = '#10b981';
+                segmentBtn.textContent = '🛣️ Segment Mode: OFF';
+                segmentBtn.style.backgroundColor = '#6b7280';
+                console.log('Enabled simplified gamification mode');
+            }
+        }
+
     </script>
 </body>
 </html> 
