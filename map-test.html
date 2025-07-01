@@ -1481,7 +1481,7 @@ Longitude: Like -74.0060 (East/West)`;
             }
         }
 
-        // Calculate grid cell boundary coordinates
+        // Calculate grid cell boundary coordinates - FIXED to match visual grid positioning
         function getGridCellBounds(row, col, gridSize, bounds) {
             const northeast = bounds.getNorthEast();
             const southwest = bounds.getSouthWest();
@@ -1489,11 +1489,37 @@ Longitude: Like -74.0060 (East/West)`;
             const latRange = northeast.lat - southwest.lat;
             const lngRange = northeast.lng - southwest.lng;
             
-            // Calculate cell boundaries (not just center)
-            const cellLatMin = southwest.lat + (latRange * (1 - (row + 1) / gridSize));
-            const cellLatMax = southwest.lat + (latRange * (1 - row / gridSize));
-            const cellLngMin = southwest.lng + (lngRange * col / gridSize);
-            const cellLngMax = southwest.lng + (lngRange * (col + 1) / gridSize);
+            // Get the map container dimensions (same as visual grid calculation)
+            const mapContainer = map.getContainer();
+            const containerWidth = mapContainer.clientWidth;
+            const containerHeight = mapContainer.clientHeight;
+            
+            // Use the smaller dimension to match visual grid (creates square cells)
+            const smallerDimension = Math.min(containerWidth, containerHeight);
+            
+            // Calculate how much of the map bounds the grid actually covers
+            const gridWidthRatio = smallerDimension / containerWidth;
+            const gridHeightRatio = smallerDimension / containerHeight;
+            
+            // Calculate the actual lat/lng range covered by the grid (not full bounds)
+            const gridLatRange = latRange * gridHeightRatio;
+            const gridLngRange = lngRange * gridWidthRatio;
+            
+            // Calculate centering offsets in geographic coordinates
+            const latOffset = (latRange - gridLatRange) / 2;
+            const lngOffset = (lngRange - gridLngRange) / 2;
+            
+            // Calculate the southwest corner of the grid area (not the map bounds)
+            const gridSouthwest = {
+                lat: southwest.lat + latOffset,
+                lng: southwest.lng + lngOffset
+            };
+            
+            // Calculate cell boundaries within the actual grid area
+            const cellLatMin = gridSouthwest.lat + (gridLatRange * (1 - (row + 1) / gridSize));
+            const cellLatMax = gridSouthwest.lat + (gridLatRange * (1 - row / gridSize));
+            const cellLngMin = gridSouthwest.lng + (gridLngRange * col / gridSize);
+            const cellLngMax = gridSouthwest.lng + (gridLngRange * (col + 1) / gridSize);
             
             return {
                 north: cellLatMax,
@@ -1503,6 +1529,13 @@ Longitude: Like -74.0060 (East/West)`;
                 center: {
                     lat: (cellLatMin + cellLatMax) / 2,
                     lng: (cellLngMin + cellLngMax) / 2
+                },
+                // Debug info
+                debug: {
+                    gridWidthRatio: gridWidthRatio.toFixed(3),
+                    gridHeightRatio: gridHeightRatio.toFixed(3),
+                    containerDimensions: `${containerWidth}x${containerHeight}`,
+                    smallerDimension: smallerDimension
                 }
             };
         }
@@ -1674,6 +1707,7 @@ Longitude: Like -74.0060 (East/West)`;
                 const cellBounds = getGridCellBounds(row, col, gridSize, bounds);
                 
                 console.log('Cell Bounds:', cellBounds);
+                console.log('Grid Scaling Debug:', cellBounds.debug);
                 
                 // Get fresh OSM data for this area
                 try {
