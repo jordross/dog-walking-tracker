@@ -2894,8 +2894,12 @@ Longitude: Like -74.0060 (East/West)`;
             
             console.log(`🔍 Found ${blocks.length} potential blocks`);
             
+            // Filter out duplicate/overlapping blocks before creating
+            const uniqueBlocks = filterUniqueBlocks(blocks);
+            console.log(`🔍 Filtered to ${uniqueBlocks.length} unique blocks from ${blocks.length} candidates`);
+            
             // Fill in any newly completed blocks
-            blocks.forEach(block => {
+            uniqueBlocks.forEach(block => {
                 if (!completedBlocks.has(block.id)) {
                     // Performance optimization: remove oldest blocks if we have too many
                     if (blockFillLayers.length >= MAX_ACTIVE_BLOCKS) {
@@ -3350,13 +3354,23 @@ Longitude: Like -74.0060 (East/West)`;
             let polygonCoords;
             
             // Use actual polygon shape if available, otherwise fall back to rectangle
-            if (block.isActualShape && block.polygon) {
+            if (block.isActualShape && block.polygon && block.polygon.length >= 3) {
                 // Use full polygon for better visibility (less simplification)
                 polygonCoords = block.polygon.map(point => [point.lat, point.lng]);
+                
+                // Ensure polygon is closed
+                const first = polygonCoords[0];
+                const last = polygonCoords[polygonCoords.length - 1];
+                if (first[0] !== last[0] || first[1] !== last[1]) {
+                    polygonCoords.push(first);
+                }
+                
                 // Only simplify if polygon is very complex (>20 points)
                 if (polygonCoords.length > 20) {
                     polygonCoords = simplifyPolygon(polygonCoords, 0.00005);
                 }
+                
+                console.log(`📐 Creating polygon with ${polygonCoords.length} points`);
             } else if (block.bounds) {
                 // Fallback to rectangle for legacy blocks
                 const bounds = block.bounds;
@@ -3368,7 +3382,15 @@ Longitude: Like -74.0060 (East/West)`;
                     [bounds.north, bounds.west]  // Close the polygon
                 ];
             } else {
-                console.warn('Block has no polygon or bounds data:', block);
+                console.warn('Block has invalid polygon or bounds data:', block);
+                console.warn('Polygon length:', block.polygon ? block.polygon.length : 'undefined');
+                console.warn('Has bounds:', !!block.bounds);
+                return;
+            }
+            
+            // Validate polygon coordinates
+            if (!polygonCoords || polygonCoords.length < 3) {
+                console.warn('Invalid polygon coordinates:', polygonCoords);
                 return;
             }
             
@@ -3376,10 +3398,10 @@ Longitude: Like -74.0060 (East/West)`;
             const blockPolygon = L.polygon(polygonCoords, {
                 color: '#059669', // Darker emerald border for visibility
                 fillColor: '#10b981', // Emerald fill
-                fillOpacity: 0.4, // More opaque for visibility
-                weight: 3, // Thicker border for visibility
-                opacity: 0.9, // More opaque border
-                dashArray: '5, 5' // Dashed pattern to show completion
+                fillOpacity: 0.6, // Much more opaque for visibility
+                weight: 4, // Thicker border for visibility
+                opacity: 1.0, // Fully opaque border
+                dashArray: null // Remove dashed pattern - use solid line
             });
             
             // Calculate area and add persistent label
@@ -3549,6 +3571,32 @@ Longitude: Like -74.0060 (East/West)`;
                 lng += coord[1];
             }
             return [lat / coords.length, lng / coords.length];
+        }
+        
+        // Filter out duplicate or overlapping blocks
+        function filterUniqueBlocks(blocks) {
+            const unique = [];
+            const tolerance = 50; // 50 meter tolerance for considering blocks the same
+            
+            for (const block of blocks) {
+                const blockCenter = getPolygonCenter(block.polygon ? block.polygon.map(p => [p.lat, p.lng]) : []);
+                
+                // Check if this block is too close to an existing one
+                const isDuplicate = unique.some(existing => {
+                    const existingCenter = getPolygonCenter(existing.polygon ? existing.polygon.map(p => [p.lat, p.lng]) : []);
+                    const distance = calculateDistance(
+                        blockCenter[0], blockCenter[1], 
+                        existingCenter[0], existingCenter[1]
+                    );
+                    return distance < tolerance;
+                });
+                
+                if (!isDuplicate) {
+                    unique.push(block);
+                }
+            }
+            
+            return unique;
         }
         
         // Update block area statistics and display
