@@ -292,6 +292,7 @@
             <button onclick="debugOSMData()" id="debugBtn">🔍 Debug OSM Data</button>
             <button onclick="toggleRawDataOverlay()" id="rawDataBtn">📊 Show Raw OSM Data</button>
             <button onclick="toggleEnhancedDetection()" id="enhancedBtn">🎯 Enhanced Detection</button>
+            <button onclick="debugSpecificCell()" id="debugCellBtn">🔬 Debug Cell Intersection</button>
             <button onclick="clearGrid()">🧹 Clear Grid</button>
         </div>
 
@@ -1643,6 +1644,145 @@ Longitude: Like -74.0060 (East/West)`;
                 }
             }
             return { intersects: false };
+        }
+
+        // Debug specific cell intersection
+        async function debugSpecificCell() {
+            if (!map || gridCells.length === 0) {
+                alert('Please load map and generate grid first!');
+                return;
+            }
+
+            const button = document.getElementById('debugCellBtn');
+            const originalText = button.textContent;
+            button.textContent = '🔬 Click a cell to debug...';
+            button.style.background = '#f59e0b';
+
+            // Add temporary click handler to grid cells
+            const debugClickHandler = async (event) => {
+                const cell = event.target;
+                if (!cell.classList.contains('grid-cell')) return;
+
+                const row = parseInt(cell.dataset.row);
+                const col = parseInt(cell.dataset.col);
+                const gridSize = parseInt(document.getElementById('grid-size').value);
+
+                console.log(`\n🔬 DEBUGGING CELL ${row},${col}`);
+                
+                // Get cell bounds
+                const bounds = map.getBounds();
+                const cellBounds = getGridCellBounds(row, col, gridSize, bounds);
+                
+                console.log('Cell Bounds:', cellBounds);
+                
+                // Get fresh OSM data for this area
+                try {
+                    button.textContent = '🔍 Analyzing intersection...';
+                    
+                    const center = map.getCenter();
+                    const radius = parseInt(document.getElementById('radius').value);
+                    const osmData = await queryWalkableAreas(center.lat, center.lng, radius);
+                    
+                    console.log(`Found ${osmData?.elements?.length || 0} OSM elements total`);
+                    
+                    // Check each OSM element against this specific cell
+                    let intersectionCount = 0;
+                    let walkableIntersections = [];
+                    
+                    if (osmData?.elements) {
+                        osmData.elements.forEach((element, idx) => {
+                            if (element.type === 'way' && element.geometry && element.geometry.length >= 2) {
+                                const tags = element.tags || {};
+                                const featureName = tags.name || tags.highway || `Element-${idx}`;
+                                
+                                // Check each line segment
+                                for (let i = 0; i < element.geometry.length - 1; i++) {
+                                    const node1 = element.geometry[i];
+                                    const node2 = element.geometry[i + 1];
+                                    
+                                    const intersects = lineIntersectsRect(
+                                        node1.lon, node1.lat, 
+                                        node2.lon, node2.lat,
+                                        cellBounds.west, cellBounds.south, 
+                                        cellBounds.east, cellBounds.north
+                                    );
+                                    
+                                    if (intersects) {
+                                        intersectionCount++;
+                                        walkableIntersections.push({
+                                            feature: featureName,
+                                            segment: i,
+                                            from: `${node1.lat.toFixed(6)}, ${node1.lon.toFixed(6)}`,
+                                            to: `${node2.lat.toFixed(6)}, ${node2.lon.toFixed(6)}`,
+                                            tags: tags
+                                        });
+                                        console.log(`✅ INTERSECTION ${intersectionCount}: ${featureName} segment ${i}`);
+                                        console.log(`   From: ${node1.lat.toFixed(6)}, ${node1.lon.toFixed(6)}`);
+                                        console.log(`   To: ${node2.lat.toFixed(6)}, ${node2.lon.toFixed(6)}`);
+                                        console.log(`   Tags:`, tags);
+                                    }
+                                }
+                            }
+                        });
+                    }
+                    
+                    // Show results
+                    const currentState = cell.dataset.state;
+                    console.log(`\n📊 CELL ${row},${col} ANALYSIS:`);
+                    console.log(`   Current state: ${currentState}`);
+                    console.log(`   Found ${intersectionCount} intersections with walkable features`);
+                    console.log(`   Cell bounds: ${cellBounds.south.toFixed(6)} to ${cellBounds.north.toFixed(6)} lat, ${cellBounds.west.toFixed(6)} to ${cellBounds.east.toFixed(6)} lng`);
+                    
+                    if (intersectionCount > 0 && currentState !== 'walkable') {
+                        console.log(`⚠️  MISMATCH: Cell has ${intersectionCount} walkable intersections but is marked as "${currentState}"`);
+                        
+                        // Create detailed alert
+                        let alertMessage = `🔬 CELL ${row},${col} DEBUG RESULTS:\n\n`;
+                        alertMessage += `Current state: ${currentState}\n`;
+                        alertMessage += `Found ${intersectionCount} walkable intersections!\n\n`;
+                        
+                        if (walkableIntersections.length > 0) {
+                            alertMessage += `Intersecting features:\n`;
+                            walkableIntersections.slice(0, 3).forEach((intersection, idx) => {
+                                alertMessage += `${idx + 1}. ${intersection.feature}\n`;
+                            });
+                            if (walkableIntersections.length > 3) {
+                                alertMessage += `... and ${walkableIntersections.length - 3} more\n`;
+                            }
+                        }
+                        
+                        alertMessage += `\nThis suggests the intersection detection isn't working properly for this cell.`;
+                        alert(alertMessage);
+                    } else if (intersectionCount === 0 && currentState === 'walkable') {
+                        alert(`🔬 CELL ${row},${col}: No intersections found but marked as walkable.\nThis could be from center-point detection or restricted area logic.`);
+                    } else {
+                        alert(`🔬 CELL ${row},${col}: ${intersectionCount} intersections found, state "${currentState}" appears correct.`);
+                    }
+                    
+                } catch (error) {
+                    console.error('Debug error:', error);
+                    alert('Debug failed: ' + error.message);
+                }
+                
+                // Remove click handlers and reset button
+                gridCells.forEach(c => c.removeEventListener('click', debugClickHandler));
+                button.textContent = originalText;
+                button.style.background = '#4f46e5';
+            };
+
+            // Add click handlers to all grid cells
+            gridCells.forEach(cell => {
+                cell.addEventListener('click', debugClickHandler);
+            });
+
+            // Reset button after 30 seconds
+            setTimeout(() => {
+                gridCells.forEach(cell => cell.removeEventListener('click', debugClickHandler));
+                if (button.textContent.includes('Click a cell')) {
+                    button.textContent = originalText;
+                    button.style.background = '#4f46e5';
+                }
+            }, 30000);
         }
 
         // Keyboard shortcuts for easier testing
