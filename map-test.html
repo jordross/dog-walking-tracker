@@ -3210,15 +3210,15 @@ Longitude: Like -74.0060 (East/West)`;
         function detectSimpleBlocks(polylines, center, radius) {
             const blocks = [];
             
-            console.log(`🔧 Building road graph from ${polylines.length} polylines`);
+            console.log(`🔧 Building ENHANCED road graph from ${polylines.length} polylines`);
             
-            // Build a graph of connected road segments (original method)
-            const roadGraph = buildRoadGraph(polylines);
+            // Build enhanced graph that includes both endpoint connections AND intersections
+            const roadGraph = buildSmartConnectionGraphWithDebug(polylines);
             
-            console.log(`🔧 Road graph has ${roadGraph.size} nodes`);
+            console.log(`🔧 Enhanced road graph has ${roadGraph.size} nodes`);
             
-            // Find closed loops in the road graph (actual block shapes)
-            const loops = findClosedLoops(roadGraph);
+            // Find closed loops in the enhanced road graph
+            const loops = findEnhancedClosedLoops(roadGraph);
             
             console.log(`🔧 Found ${loops.length} closed loops`);
             
@@ -4441,7 +4441,7 @@ Longitude: Like -74.0060 (East/West)`;
             return null;
         }
 
-        // Calculate distance from point to line segment
+                 // Calculate distance from point to line segment
         function distanceToLineSegment(px, py, x1, y1, x2, y2) {
             const A = px - x1;
             const B = py - y1;
@@ -4471,6 +4471,85 @@ Longitude: Like -74.0060 (East/West)`;
             const dx = px - xx;
             const dy = py - yy;
             return Math.sqrt(dx * dx + dy * dy) * 111000; // Convert to meters
+        }
+
+        // Enhanced loop detection that works with intersection-based graph
+        function findEnhancedClosedLoops(graph) {
+            const loops = [];
+            const visited = new Set();
+            
+            console.log(`🔧 Starting enhanced loop detection with ${graph.size} nodes...`);
+            
+            // Try to find loops starting from each node that has at least 2 connections
+            for (const [startKey, startNode] of graph) {
+                if (visited.has(startKey) || startNode.connections.length < 2) {
+                    continue;
+                }
+                
+                console.log(`🔧 Trying to find loops from node: ${startKey} (${startNode.connections.length} connections)`);
+                
+                // Use depth-first search to find loops back to start
+                const foundLoops = findLoopsFromEnhancedNode(graph, startKey, startKey, [startKey], new Set([startKey]), 10);
+                
+                foundLoops.forEach((loop, index) => {
+                    if (loop.length >= 3 && loop.length <= 10) {
+                        // Convert node keys back to coordinate points for polygon
+                        const loopCoords = loop.map(nodeKey => {
+                            const node = graph.get(nodeKey);
+                            return [node.lat, node.lng];
+                        });
+                        
+                        // Check if this loop creates a reasonable polygon
+                        const area = calculatePolygonArea(loopCoords);
+                        if (area >= 500 && area <= 100000) { // 500m² to 10 hectares
+                            loops.push(loopCoords);
+                            console.log(`✅ Found valid loop with ${loop.length} nodes, area: ${area.toFixed(0)}m²`);
+                            
+                            // Mark nodes as visited to avoid duplicate loops
+                            loop.forEach(nodeKey => visited.add(nodeKey));
+                        } else {
+                            console.log(`❌ Loop area ${area.toFixed(0)}m² out of valid range (500-100000)`);
+                        }
+                    } else {
+                        console.log(`❌ Loop with ${loop.length} nodes rejected (need 3-10 nodes)`);
+                    }
+                });
+            }
+            
+            console.log(`🔧 Enhanced loop detection found ${loops.length} valid loops`);
+            return loops;
+        }
+
+        // Recursive function to find loops in enhanced graph
+        function findLoopsFromEnhancedNode(graph, startKey, currentKey, path, pathSet, maxDepth) {
+            const foundLoops = [];
+            
+            if (path.length > maxDepth) {
+                return foundLoops; // Prevent infinite recursion
+            }
+            
+            const currentNode = graph.get(currentKey);
+            if (!currentNode) {
+                return foundLoops;
+            }
+            
+            // Check all connections from current node
+            for (const nextKey of currentNode.connections) {
+                if (path.length > 2 && nextKey === startKey) {
+                    // Found a loop back to start!
+                    const loop = [...path]; // Don't include start again
+                    foundLoops.push(loop);
+                    console.log(`🎯 Found loop: ${loop.length} nodes`);
+                } else if (!pathSet.has(nextKey)) {
+                    // Continue exploring this path
+                    const newPath = [...path, nextKey];
+                    const newPathSet = new Set([...pathSet, nextKey]);
+                    const subLoops = findLoopsFromEnhancedNode(graph, startKey, nextKey, newPath, newPathSet, maxDepth);
+                    foundLoops.push(...subLoops);
+                }
+            }
+            
+            return foundLoops;
         }
 
     </script>
