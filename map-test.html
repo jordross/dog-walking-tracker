@@ -3171,9 +3171,9 @@ Longitude: Like -74.0060 (East/West)`;
         // Build a simplified connection graph based on segment endpoints
         function buildSmartConnectionGraph(polylines) {
             const graph = new Map();
-            const tolerance = 0.00008; // ~8 meters tolerance for endpoint connections
+            const tolerance = 0.0002; // ~22 meters tolerance for endpoint connections (increased from 8m)
             
-            console.log(`🔧 Building connection graph with ${tolerance * 111000}m tolerance`);
+            console.log(`🔧 Building connection graph with ${(tolerance * 111000).toFixed(1)}m tolerance`);
             
             // Add all segment endpoints as potential nodes
             polylines.forEach((polyline, index) => {
@@ -3181,6 +3181,8 @@ Longitude: Like -74.0060 (East/West)`;
                 if (coords.length >= 2) {
                     const startPoint = {lat: coords[0].lat, lng: coords[0].lng};
                     const endPoint = {lat: coords[coords.length - 1].lat, lng: coords[coords.length - 1].lng};
+                    
+                    console.log(`🔧 Segment ${index}: start=(${startPoint.lat.toFixed(6)}, ${startPoint.lng.toFixed(6)}) end=(${endPoint.lat.toFixed(6)}, ${endPoint.lng.toFixed(6)})`);
                     
                     // Add start point
                     const startKey = getPointKey(startPoint);
@@ -3208,6 +3210,7 @@ Longitude: Like -74.0060 (East/West)`;
             
             // Find connections between nearby endpoints
             const graphNodes = Array.from(graph.values());
+            let connectionCount = 0;
             for (let i = 0; i < graphNodes.length; i++) {
                 for (let j = i + 1; j < graphNodes.length; j++) {
                     const nodeA = graphNodes[i];
@@ -3218,6 +3221,11 @@ Longitude: Like -74.0060 (East/West)`;
                         nodeB.point.lat, nodeB.point.lng
                     );
                     
+                    // Debug: log distances to see what we're working with
+                    if (distance <= 50) { // Log distances up to 50m
+                        console.log(`🔧 Distance between endpoints: ${distance.toFixed(1)}m (tolerance: ${(tolerance * 111000).toFixed(1)}m)`);
+                    }
+                    
                     if (distance <= tolerance * 111000) { // Convert to meters
                         // Connect these endpoints
                         const keyA = getPointKey(nodeA.point);
@@ -3225,11 +3233,13 @@ Longitude: Like -74.0060 (East/West)`;
                         
                         nodeA.connections.push(keyB);
                         nodeB.connections.push(keyA);
+                        connectionCount++;
+                        console.log(`✅ Connected endpoints ${distance.toFixed(1)}m apart`);
                     }
                 }
             }
             
-            console.log(`🔧 Created ${graph.size} nodes with ${Array.from(graph.values()).reduce((sum, node) => sum + node.connections.length, 0) / 2} connections`);
+            console.log(`🔧 Created ${graph.size} endpoint nodes with ${connectionCount} connections (${(tolerance * 111000).toFixed(1)}m tolerance)`);
             return graph;
         }
 
