@@ -297,7 +297,8 @@
             <button onclick="toggleSegmentMode()" id="segmentBtn">🛣️ Segment Mode (Prototype)</button>
             <button id="gameBtn" onclick="toggleGameMode()" style="background: #9333ea; color: white;">🎮 Simple Game Mode</button>
             <button onclick="clearGrid()">🧹 Clear Grid</button>
-            <button onclick="clearBlockFills()" style="background: #ef4444; color: white;">🗑️ Clear Blocks</button>
+            <button id="clearBlocksBtn" onclick="clearBlockFills()" style="background-color: #dc2626; color: white; border: none; padding: 10px 15px; margin: 5px; border-radius: 5px; cursor: pointer;">🗑️ Clear Blocks</button>
+            <button id="debugBlocksBtn" onclick="debugBlockDetection()" style="background-color: #8b5cf6; color: white; border: none; padding: 10px 15px; margin: 5px; border-radius: 5px; cursor: pointer;">🔍 Debug Blocks</button>
         </div>
 
         <div class="map-container">
@@ -2888,6 +2889,8 @@ Longitude: Like -74.0060 (East/West)`;
             // Find potential blocks (this is a simplified approach)
             const blocks = findCompletedBlocks(completedSegments);
             
+            console.log(`🔍 Found ${blocks.length} potential blocks`);
+            
             // Fill in any newly completed blocks
             blocks.forEach(block => {
                 if (!completedBlocks.has(block.id)) {
@@ -2922,11 +2925,17 @@ Longitude: Like -74.0060 (East/West)`;
         function detectSimpleBlocks(polylines, center, radius) {
             const blocks = [];
             
+            console.log(`🔧 Building road graph from ${polylines.length} polylines`);
+            
             // Build a graph of connected road segments
             const roadGraph = buildRoadGraph(polylines);
             
+            console.log(`🔧 Road graph has ${roadGraph.size} nodes`);
+            
             // Find closed loops in the road graph (actual block shapes)
             const loops = findClosedLoops(roadGraph);
+            
+            console.log(`🔧 Found ${loops.length} closed loops`);
             
             // Convert valid loops into block polygons
             loops.forEach((loop, index) => {
@@ -2935,15 +2944,20 @@ Longitude: Like -74.0060 (East/West)`;
                     const polygon = createPolygonFromLoop(loop);
                     
                     if (polygon && isValidBlockSize(polygon)) {
+                        console.log(`✅ Valid block created: ${blockId}, area: ${calculatePolygonArea(polygon)}m²`);
                         blocks.push({
                             id: blockId,
                             polygon: polygon,
                             area: calculatePolygonArea(polygon),
                             isActualShape: true // Flag to indicate this is a real shape, not a rectangle
                         });
+                    } else {
+                        console.log(`❌ Invalid block: ${blockId}, area: ${polygon ? calculatePolygonArea(polygon) : 'no polygon'}m²`);
                     }
                 }
             });
+            
+            console.log(`🔧 Final blocks array has ${blocks.length} valid blocks`);
             
             return blocks;
         }
@@ -3204,6 +3218,43 @@ Longitude: Like -74.0060 (East/West)`;
             
             // Check for block completion after each segment is marked
             setTimeout(() => checkBlockCompletion(), 100); // Small delay to ensure UI updates
+        }
+
+        // Debug block detection
+        function debugBlockDetection() {
+            console.log('🔍 Manual block detection debug started...');
+            
+            const completedSegments = Array.from(walkedSegments.entries())
+                .filter(([id, data]) => data.completed)
+                .map(([id, data]) => id);
+            
+            console.log(`📊 Completed segments: ${completedSegments.length}`, completedSegments);
+            
+            if (completedSegments.length === 0) {
+                alert('No completed segments found! Click on some blue road segments first.');
+                return;
+            }
+            
+            // Show which polylines are completed
+            const completedPolylines = segmentLayers.filter(layer => 
+                completedSegments.includes(layer.options.segmentId)
+            );
+            
+            console.log(`📊 Completed polylines: ${completedPolylines.length}`);
+            
+            // Test block detection manually
+            checkBlockCompletion();
+            
+            // Also try to detect blocks manually
+            if (completedPolylines.length >= 3) {
+                console.log('🔧 Attempting manual block detection with completed polylines...');
+                const center = map.getCenter();
+                const radius = getRadiusFromInput();
+                const manualBlocks = detectSimpleBlocks(completedPolylines, center, radius);
+                console.log(`🔧 Manual detection found ${manualBlocks.length} blocks`);
+            } else {
+                console.log('⚠️ Need at least 3 completed segments to form a block');
+            }
         }
 
     </script>
