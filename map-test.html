@@ -297,6 +297,7 @@
             <button onclick="toggleSegmentMode()" id="segmentBtn">🛣️ Segment Mode (Prototype)</button>
             <button id="gameBtn" onclick="toggleGameMode()" style="background: #9333ea; color: white;">🎮 Simple Game Mode</button>
             <button onclick="clearGrid()">🧹 Clear Grid</button>
+            <button onclick="clearBlockFills()" style="background: #ef4444; color: white;">🗑️ Clear Blocks</button>
         </div>
 
         <div class="map-container">
@@ -2226,7 +2227,7 @@ Longitude: Like -74.0060 (East/West)`;
                             
                             // Add click handler to mark as walked
                             polyline.on('click', () => {
-                                markSegmentAsWalked(segmentId, polyline, tags);
+                                markSegmentAsWalkedWithBlockCheck(segmentId, polyline, tags);
                             });
                             
                             // Add tooltip
@@ -2812,25 +2813,7 @@ Longitude: Like -74.0060 (East/West)`;
                         
                         // Click to complete
                         polyline.on('click', () => {
-                            const walkData = walkedSegments.get(segmentId) || {progress: 0, completed: false};
-                            walkData.completed = !walkData.completed;
-                            walkData.progress = walkData.completed ? 100 : 0;
-                            walkedSegments.set(segmentId, walkData);
-                            
-                            // Update visual
-                            if (walkData.completed) {
-                                polyline.setStyle({
-                                    color: isRoad ? '#3b82f6' : '#10b981',
-                                    weight: isRoad ? 10 : 8
-                                });
-                            } else {
-                                polyline.setStyle({
-                                    color: '#94a3b8',
-                                    weight: isPark ? 6 : 8
-                                });
-                            }
-                            
-                            updateSegmentStats();
+                            markSegmentAsWalkedWithBlockCheck(segmentId, polyline, tags);
                         });
                         
                         // Tooltip
@@ -2887,6 +2870,195 @@ Longitude: Like -74.0060 (East/West)`;
                 console.error('Error in toggleGameMode:', error);
                 alert('Failed to toggle game mode. Please try again.');
             }
+        }
+
+        // === BLOCK COMPLETION SYSTEM ===
+        // Detect when user has "looped" around blocks and fill them with color
+        
+        let blockFillLayers = []; // Store completed block polygons
+        
+        // Check for completed blocks after each segment completion
+        function checkBlockCompletion() {
+            const completedSegments = Array.from(walkedSegments.entries())
+                .filter(([id, data]) => data.completed)
+                .map(([id, data]) => id);
+            
+            console.log(`🔍 Checking block completion with ${completedSegments.length} completed segments`);
+            
+            // Find potential blocks (this is a simplified approach)
+            const blocks = findCompletedBlocks(completedSegments);
+            
+            // Fill in any newly completed blocks
+            blocks.forEach(block => {
+                if (!completedBlocks.has(block.id)) {
+                    fillCompletedBlock(block);
+                    completedBlocks.add(block.id);
+                    console.log(`🎉 Block completed! ${block.id}`);
+                }
+            });
+        }
+        
+        // Find blocks that have been completely walked around
+        function findCompletedBlocks(completedSegmentIds) {
+            const blocks = [];
+            const center = map.getCenter();
+            const radius = getRadiusFromInput();
+            
+            // Get all completed segment polylines
+            const completedPolylines = segmentLayers.filter(layer => 
+                completedSegmentIds.includes(layer.options.segmentId)
+            );
+            
+            if (completedPolylines.length < 3) return blocks; // Need at least 3 segments to form a block
+            
+            // Simple block detection: look for rectangular patterns
+            // This is a simplified approach - in reality you'd need more sophisticated topology
+            const blockCandidates = detectSimpleBlocks(completedPolylines, center, radius);
+            
+            return blockCandidates;
+        }
+        
+        // Simplified block detection algorithm
+        function detectSimpleBlocks(polylines, center, radius) {
+            const blocks = [];
+            
+            // For now, create simple rectangular blocks based on intersection patterns
+            // This is a simplified approach for the demo
+            
+            // Group nearby polylines that could form blocks
+            const intersections = new Map();
+            
+            polylines.forEach((polyline, index) => {
+                const coords = polyline.getLatLngs();
+                const startPoint = coords[0];
+                const endPoint = coords[coords.length - 1];
+                
+                // Store intersections (simplified - just using start/end points)
+                const startKey = `${startPoint.lat.toFixed(5)},${startPoint.lng.toFixed(5)}`;
+                const endKey = `${endPoint.lat.toFixed(5)},${endPoint.lng.toFixed(5)}`;
+                
+                if (!intersections.has(startKey)) intersections.set(startKey, []);
+                if (!intersections.has(endKey)) intersections.set(endKey, []);
+                
+                intersections.get(startKey).push({polyline, point: startPoint, type: 'start'});
+                intersections.get(endKey).push({polyline, point: endPoint, type: 'end'});
+            });
+            
+            // Find intersection points with 3+ connections (potential block corners)
+            const blockCorners = [];
+            intersections.forEach((connections, key) => {
+                if (connections.length >= 3) {
+                    const [lat, lng] = key.split(',').map(Number);
+                    blockCorners.push({lat, lng, connections});
+                }
+            });
+            
+            // If we have 4+ corners, try to form rectangular blocks
+            if (blockCorners.length >= 4) {
+                const blockId = `block_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                
+                // Create a simple rectangular block using the bounding box of corners
+                const lats = blockCorners.map(c => c.lat);
+                const lngs = blockCorners.map(c => c.lng);
+                
+                const bounds = {
+                    north: Math.max(...lats),
+                    south: Math.min(...lats),
+                    east: Math.max(...lngs),
+                    west: Math.min(...lngs)
+                };
+                
+                // Only create block if it's a reasonable size (not too big/small)
+                const blockWidth = calculateDistance(bounds.north, bounds.west, bounds.north, bounds.east);
+                const blockHeight = calculateDistance(bounds.north, bounds.west, bounds.south, bounds.west);
+                
+                if (blockWidth > 50 && blockWidth < 500 && blockHeight > 50 && blockHeight < 500) {
+                    blocks.push({
+                        id: blockId,
+                        bounds: bounds,
+                        corners: blockCorners,
+                        area: blockWidth * blockHeight
+                    });
+                }
+            }
+            
+            return blocks;
+        }
+        
+        // Fill a completed block with color
+        function fillCompletedBlock(block) {
+            const bounds = block.bounds;
+            
+            // Create a rectangle polygon for the completed block
+            const rectangleCoords = [
+                [bounds.north, bounds.west], // Northwest
+                [bounds.north, bounds.east], // Northeast  
+                [bounds.south, bounds.east], // Southeast
+                [bounds.south, bounds.west], // Southwest
+                [bounds.north, bounds.west]  // Close the polygon
+            ];
+            
+            // Create a semi-transparent filled polygon
+            const blockPolygon = L.polygon(rectangleCoords, {
+                color: '#10b981', // Emerald border
+                fillColor: '#10b981', // Emerald fill
+                fillOpacity: 0.2, // Semi-transparent
+                weight: 2,
+                opacity: 0.6,
+                dashArray: '5, 5' // Dashed border to show it's a completion bonus
+            });
+            
+            // Add tooltip showing block completion
+            blockPolygon.bindTooltip(`🎉 Completed Block!<br/>Area: ~${Math.round(block.area)}m²`, {
+                sticky: true,
+                direction: 'center'
+            });
+            
+            blockPolygon.addTo(map);
+            blockFillLayers.push(blockPolygon);
+            
+            console.log(`✅ Filled completed block: ${block.id}`);
+            
+            // Update statistics
+            updateSegmentStats();
+        }
+        
+        // Clear all completed block overlays
+        function clearBlockFills() {
+            blockFillLayers.forEach(layer => {
+                map.removeLayer(layer);
+            });
+            blockFillLayers = [];
+            completedBlocks.clear();
+        }
+        
+        // Modified click handler to check for block completion
+        function markSegmentAsWalkedWithBlockCheck(segmentId, polyline, tags) {
+            const walkData = walkedSegments.get(segmentId) || {progress: 0, completed: false};
+            walkData.completed = !walkData.completed;
+            walkData.progress = walkData.completed ? 100 : 0;
+            walkedSegments.set(segmentId, walkData);
+            
+            // Update visual
+            const isRoad = tags.highway && tags.highway.match(/^(primary|secondary|tertiary|residential|unclassified)$/);
+            const isPark = tags.leisure === 'park' || tags.leisure === 'recreation_ground';
+            
+            if (walkData.completed) {
+                polyline.setStyle({
+                    color: isRoad ? '#3b82f6' : '#10b981',
+                    weight: isRoad ? 10 : 8
+                });
+            } else {
+                polyline.setStyle({
+                    color: '#94a3b8',
+                    weight: isPark ? 6 : 8
+                });
+            }
+            
+            updateSegmentStats();
+            
+            // Check for block completion after each segment is marked
+            setTimeout(() => checkBlockCompletion(), 100); // Small delay to ensure UI updates
         }
 
     </script>
