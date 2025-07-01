@@ -2918,98 +2918,243 @@ Longitude: Like -74.0060 (East/West)`;
             return blockCandidates;
         }
         
-        // Simplified block detection algorithm
+        // Advanced polygon detection algorithm - traces actual block shapes
         function detectSimpleBlocks(polylines, center, radius) {
             const blocks = [];
             
-            // For now, create simple rectangular blocks based on intersection patterns
-            // This is a simplified approach for the demo
+            // Build a graph of connected road segments
+            const roadGraph = buildRoadGraph(polylines);
             
-            // Group nearby polylines that could form blocks
-            const intersections = new Map();
+            // Find closed loops in the road graph (actual block shapes)
+            const loops = findClosedLoops(roadGraph);
             
-            polylines.forEach((polyline, index) => {
-                const coords = polyline.getLatLngs();
-                const startPoint = coords[0];
-                const endPoint = coords[coords.length - 1];
-                
-                // Store intersections (simplified - just using start/end points)
-                const startKey = `${startPoint.lat.toFixed(5)},${startPoint.lng.toFixed(5)}`;
-                const endKey = `${endPoint.lat.toFixed(5)},${endPoint.lng.toFixed(5)}`;
-                
-                if (!intersections.has(startKey)) intersections.set(startKey, []);
-                if (!intersections.has(endKey)) intersections.set(endKey, []);
-                
-                intersections.get(startKey).push({polyline, point: startPoint, type: 'start'});
-                intersections.get(endKey).push({polyline, point: endPoint, type: 'end'});
-            });
-            
-            // Find intersection points with 3+ connections (potential block corners)
-            const blockCorners = [];
-            intersections.forEach((connections, key) => {
-                if (connections.length >= 3) {
-                    const [lat, lng] = key.split(',').map(Number);
-                    blockCorners.push({lat, lng, connections});
+            // Convert valid loops into block polygons
+            loops.forEach((loop, index) => {
+                if (loop.length >= 3) { // Need at least 3 points for a polygon
+                    const blockId = `block_${Date.now()}_${index}`;
+                    const polygon = createPolygonFromLoop(loop);
+                    
+                    if (polygon && isValidBlockSize(polygon)) {
+                        blocks.push({
+                            id: blockId,
+                            polygon: polygon,
+                            area: calculatePolygonArea(polygon),
+                            isActualShape: true // Flag to indicate this is a real shape, not a rectangle
+                        });
+                    }
                 }
             });
-            
-            // If we have 4+ corners, try to form rectangular blocks
-            if (blockCorners.length >= 4) {
-                const blockId = `block_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-                
-                // Create a simple rectangular block using the bounding box of corners
-                const lats = blockCorners.map(c => c.lat);
-                const lngs = blockCorners.map(c => c.lng);
-                
-                const bounds = {
-                    north: Math.max(...lats),
-                    south: Math.min(...lats),
-                    east: Math.max(...lngs),
-                    west: Math.min(...lngs)
-                };
-                
-                // Only create block if it's a reasonable size (not too big/small)
-                const blockWidth = calculateDistance(bounds.north, bounds.west, bounds.north, bounds.east);
-                const blockHeight = calculateDistance(bounds.north, bounds.west, bounds.south, bounds.west);
-                
-                if (blockWidth > 50 && blockWidth < 500 && blockHeight > 50 && blockHeight < 500) {
-                    blocks.push({
-                        id: blockId,
-                        bounds: bounds,
-                        corners: blockCorners,
-                        area: blockWidth * blockHeight
-                    });
-                }
-            }
             
             return blocks;
         }
         
-        // Fill a completed block with color
+        // Build a graph of connected road segments
+        function buildRoadGraph(polylines) {
+            const graph = new Map();
+            const tolerance = 0.00005; // ~5 meters tolerance for connecting endpoints
+            
+            polylines.forEach(polyline => {
+                const coords = polyline.getLatLngs();
+                const startPoint = coords[0];
+                const endPoint = coords[coords.length - 1];
+                
+                const startKey = getPointKey(startPoint);
+                const endKey = getPointKey(endPoint);
+                
+                // Add all coordinate points of this road segment
+                const roadPoints = coords.map(coord => ({lat: coord.lat, lng: coord.lng}));
+                
+                // Connect start and end points in the graph
+                if (!graph.has(startKey)) graph.set(startKey, {point: startPoint, connections: []});
+                if (!graph.has(endKey)) graph.set(endKey, {point: endPoint, connections: []});
+                
+                // Add bidirectional connection with the road points
+                graph.get(startKey).connections.push({
+                    to: endKey,
+                    roadPoints: roadPoints,
+                    polyline: polyline
+                });
+                
+                graph.get(endKey).connections.push({
+                    to: startKey, 
+                    roadPoints: [...roadPoints].reverse(), // Reverse for opposite direction
+                    polyline: polyline
+                });
+            });
+            
+            return graph;
+        }
+        
+        // Find closed loops in the road graph
+        function findClosedLoops(graph) {
+            const loops = [];
+            const visited = new Set();
+            
+            // Try to find loops starting from each node
+            for (const [startKey, startNode] of graph) {
+                if (visited.has(startKey)) continue;
+                
+                const foundLoops = findLoopsFromNode(graph, startKey, visited);
+                loops.push(...foundLoops);
+            }
+            
+            return loops;
+        }
+        
+        // Find loops starting from a specific node using DFS
+        function findLoopsFromNode(graph, startKey, globalVisited) {
+            const loops = [];
+            const path = [startKey];
+            const pathSet = new Set([startKey]);
+            
+            function dfs(currentKey, depth) {
+                if (depth > 8) return; // Prevent infinite loops, max 8 segments per block
+                
+                const currentNode = graph.get(currentKey);
+                if (!currentNode) return;
+                
+                for (const connection of currentNode.connections) {
+                    const nextKey = connection.to;
+                    
+                    // Found a loop back to start
+                    if (nextKey === startKey && path.length >= 3) {
+                        const loopPoints = createLoopFromPath(graph, path);
+                        if (loopPoints.length >= 3) {
+                            loops.push(loopPoints);
+                        }
+                        continue;
+                    }
+                    
+                    // Continue exploring if not already in current path
+                    if (!pathSet.has(nextKey)) {
+                        path.push(nextKey);
+                        pathSet.add(nextKey);
+                        dfs(nextKey, depth + 1);
+                        path.pop();
+                        pathSet.delete(nextKey);
+                    }
+                }
+            }
+            
+            dfs(startKey, 0);
+            globalVisited.add(startKey);
+            
+            return loops;
+        }
+        
+        // Create actual polygon coordinates from a path of connected roads
+        function createLoopFromPath(graph, path) {
+            const loopPoints = [];
+            
+            for (let i = 0; i < path.length; i++) {
+                const currentKey = path[i];
+                const nextKey = path[(i + 1) % path.length];
+                
+                const currentNode = graph.get(currentKey);
+                if (!currentNode) continue;
+                
+                // Find the connection to the next node
+                const connection = currentNode.connections.find(conn => conn.to === nextKey);
+                if (connection && connection.roadPoints) {
+                    // Add all points along this road segment (except the last to avoid duplicates)
+                    const points = connection.roadPoints.slice(0, -1);
+                    loopPoints.push(...points);
+                }
+            }
+            
+            return loopPoints;
+        }
+        
+        // Helper function to get a consistent key for a point
+        function getPointKey(point) {
+            return `${point.lat.toFixed(5)},${point.lng.toFixed(5)}`;
+        }
+        
+        // Create a polygon from a loop of points
+        function createPolygonFromLoop(loop) {
+            if (loop.length < 3) return null;
+            
+            // Ensure the polygon is closed
+            const polygonPoints = [...loop];
+            const firstPoint = polygonPoints[0];
+            const lastPoint = polygonPoints[polygonPoints.length - 1];
+            
+            // Close the polygon if not already closed
+            if (Math.abs(firstPoint.lat - lastPoint.lat) > 0.00001 || 
+                Math.abs(firstPoint.lng - lastPoint.lng) > 0.00001) {
+                polygonPoints.push(firstPoint);
+            }
+            
+            return polygonPoints;
+        }
+        
+        // Check if a polygon is a valid block size
+        function isValidBlockSize(polygon) {
+            const area = calculatePolygonArea(polygon);
+            return area > 1000 && area < 50000; // Between ~1000m² and ~50000m² (reasonable block sizes)
+        }
+        
+        // Calculate polygon area using shoelace formula
+        function calculatePolygonArea(polygon) {
+            if (polygon.length < 3) return 0;
+            
+            let area = 0;
+            const earthRadius = 6371000; // Earth radius in meters
+            
+            for (let i = 0; i < polygon.length - 1; i++) {
+                const p1 = polygon[i];
+                const p2 = polygon[i + 1];
+                
+                // Convert to approximate meters for area calculation
+                const lat1Rad = p1.lat * Math.PI / 180;
+                const lat2Rad = p2.lat * Math.PI / 180;
+                const lng1Rad = p1.lng * Math.PI / 180;
+                const lng2Rad = p2.lng * Math.PI / 180;
+                
+                area += (lng2Rad - lng1Rad) * (2 + Math.sin(lat1Rad) + Math.sin(lat2Rad));
+            }
+            
+            area = Math.abs(area * earthRadius * earthRadius / 2);
+            return area;
+        }
+        
+        // Fill a completed block with color using actual polygon shape
         function fillCompletedBlock(block) {
-            const bounds = block.bounds;
+            let polygonCoords;
             
-            // Create a rectangle polygon for the completed block
-            const rectangleCoords = [
-                [bounds.north, bounds.west], // Northwest
-                [bounds.north, bounds.east], // Northeast  
-                [bounds.south, bounds.east], // Southeast
-                [bounds.south, bounds.west], // Southwest
-                [bounds.north, bounds.west]  // Close the polygon
-            ];
+            // Use actual polygon shape if available, otherwise fall back to rectangle
+            if (block.isActualShape && block.polygon) {
+                // Convert polygon points to Leaflet coordinate format [lat, lng]
+                polygonCoords = block.polygon.map(point => [point.lat, point.lng]);
+            } else if (block.bounds) {
+                // Fallback to rectangle for legacy blocks
+                const bounds = block.bounds;
+                polygonCoords = [
+                    [bounds.north, bounds.west], // Northwest
+                    [bounds.north, bounds.east], // Northeast  
+                    [bounds.south, bounds.east], // Southeast
+                    [bounds.south, bounds.west], // Southwest
+                    [bounds.north, bounds.west]  // Close the polygon
+                ];
+            } else {
+                console.warn('Block has no polygon or bounds data:', block);
+                return;
+            }
             
-            // Create a semi-transparent filled polygon
-            const blockPolygon = L.polygon(rectangleCoords, {
+            // Create a semi-transparent filled polygon following the actual block shape
+            const blockPolygon = L.polygon(polygonCoords, {
                 color: '#10b981', // Emerald border
                 fillColor: '#10b981', // Emerald fill
-                fillOpacity: 0.2, // Semi-transparent
-                weight: 2,
-                opacity: 0.6,
+                fillOpacity: 0.3, // Semi-transparent
+                weight: 3,
+                opacity: 0.8,
                 dashArray: '5, 5' // Dashed border to show it's a completion bonus
             });
             
             // Add tooltip showing block completion
-            blockPolygon.bindTooltip(`🎉 Completed Block!<br/>Area: ~${Math.round(block.area)}m²`, {
+            const areaText = block.area ? `~${Math.round(block.area)}m²` : 'Unknown area';
+            const shapeText = block.isActualShape ? 'Actual Shape' : 'Rectangular';
+            blockPolygon.bindTooltip(`🎉 Completed Block!<br/>Area: ${areaText}<br/>Shape: ${shapeText}`, {
                 sticky: true,
                 direction: 'center'
             });
@@ -3017,7 +3162,7 @@ Longitude: Like -74.0060 (East/West)`;
             blockPolygon.addTo(map);
             blockFillLayers.push(blockPolygon);
             
-            console.log(`✅ Filled completed block: ${block.id}`);
+            console.log(`✅ Filled completed block: ${block.id} (${shapeText})`);
             
             // Update statistics
             updateSegmentStats();
