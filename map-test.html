@@ -4493,22 +4493,28 @@ Longitude: Like -74.0060 (East/West)`;
                 
                 foundLoops.forEach((loop, index) => {
                     if (loop.length >= 3 && loop.length <= 10) {
-                        // Convert node keys back to coordinate points for polygon
-                        const loopCoords = loop.map(nodeKey => {
-                            const node = graph.get(nodeKey);
-                            return [node.lat, node.lng];
-                        });
+                        console.log(`🔧 Processing loop with ${loop.length} intersection nodes...`);
                         
-                        // Check if this loop creates a reasonable polygon
-                        const area = calculatePolygonArea(loopCoords);
-                        if (area >= 500 && area <= 100000) { // 500m² to 10 hectares
-                            loops.push(loopCoords);
-                            console.log(`✅ Found valid loop with ${loop.length} nodes, area: ${area.toFixed(0)}m²`);
+                        // Instead of just using intersection points, build the full polygon 
+                        // by tracing the road segments between intersection points
+                        const fullPolygonCoords = buildFullPolygonFromLoop(loop, graph, polylines);
+                        
+                        if (fullPolygonCoords && fullPolygonCoords.length >= 3) {
+                            // Check if this loop creates a reasonable polygon
+                            const area = calculatePolygonArea(fullPolygonCoords);
+                            console.log(`🔧 Full polygon has ${fullPolygonCoords.length} coordinates, area: ${area.toFixed(0)}m²`);
                             
-                            // Mark nodes as visited to avoid duplicate loops
-                            loop.forEach(nodeKey => visited.add(nodeKey));
+                            if (area >= 500 && area <= 100000) { // 500m² to 10 hectares
+                                loops.push(fullPolygonCoords);
+                                console.log(`✅ Found valid block with ${loop.length} intersection nodes, ${fullPolygonCoords.length} polygon points, area: ${area.toFixed(0)}m²`);
+                                
+                                // Mark nodes as visited to avoid duplicate loops
+                                loop.forEach(nodeKey => visited.add(nodeKey));
+                            } else {
+                                console.log(`❌ Block area ${area.toFixed(0)}m² out of valid range (500-100000m²)`);
+                            }
                         } else {
-                            console.log(`❌ Loop area ${area.toFixed(0)}m² out of valid range (500-100000)`);
+                            console.log(`❌ Could not build full polygon from intersection loop`);
                         }
                     } else {
                         console.log(`❌ Loop with ${loop.length} nodes rejected (need 3-10 nodes)`);
@@ -4520,7 +4526,7 @@ Longitude: Like -74.0060 (East/West)`;
             return loops;
         }
 
-        // Recursive function to find loops in enhanced graph
+                 // Recursive function to find loops in enhanced graph
         function findLoopsFromEnhancedNode(graph, startKey, currentKey, path, pathSet, maxDepth) {
             const foundLoops = [];
             
@@ -4550,6 +4556,117 @@ Longitude: Like -74.0060 (East/West)`;
             }
             
             return foundLoops;
+        }
+
+        // Build a full polygon by tracing road segments between intersection points
+        function buildFullPolygonFromLoop(loop, graph, polylines) {
+            const fullPolygon = [];
+            const tolerance = 0.0002; // ~22 meters
+            
+            console.log(`🔧 Building full polygon from ${loop.length} intersection points...`);
+            
+            // For each pair of consecutive intersection points in the loop
+            for (let i = 0; i < loop.length; i++) {
+                const currentKey = loop[i];
+                const nextKey = loop[(i + 1) % loop.length];
+                
+                const currentNode = graph.get(currentKey);
+                const nextNode = graph.get(nextKey);
+                
+                if (!currentNode || !nextNode) {
+                    console.log(`❌ Missing node: ${currentKey} or ${nextKey}`);
+                    continue;
+                }
+                
+                console.log(`🔧 Finding road segment from ${currentKey} to ${nextKey}`);
+                
+                // Find the polyline that connects these two intersection points
+                const connectingSegment = findSegmentConnectingPoints(
+                    currentNode, nextNode, polylines, tolerance
+                );
+                
+                if (connectingSegment) {
+                    // Get the coordinates along this segment between the two points
+                    const segmentCoords = getCoordinatesBetweenPoints(
+                        connectingSegment, currentNode, nextNode
+                    );
+                    
+                    // Add these coordinates to our polygon (excluding the last point to avoid duplicates)
+                    if (segmentCoords.length > 0) {
+                        fullPolygon.push(...segmentCoords.slice(0, -1));
+                        console.log(`✅ Added ${segmentCoords.length - 1} coordinates from segment`);
+                    }
+                } else {
+                    console.log(`❌ No connecting segment found between ${currentKey} and ${nextKey}`);
+                    // Fallback: just connect directly
+                    fullPolygon.push([currentNode.lat, currentNode.lng]);
+                }
+            }
+            
+            console.log(`🔧 Full polygon built with ${fullPolygon.length} total coordinates`);
+            return fullPolygon.length >= 3 ? fullPolygon : null;
+        }
+
+        // Find a polyline segment that connects two intersection points
+        function findSegmentConnectingPoints(pointA, pointB, polylines, tolerance) {
+            const toleranceMeters = tolerance * 111000;
+            
+            for (const polyline of polylines) {
+                const coords = polyline.getLatLngs();
+                
+                // Check if this polyline passes near both points
+                let nearPointA = false;
+                let nearPointB = false;
+                
+                for (const coord of coords) {
+                    const distToA = calculateDistance(pointA.lat, pointA.lng, coord.lat, coord.lng);
+                    const distToB = calculateDistance(pointB.lat, pointB.lng, coord.lat, coord.lng);
+                    
+                    if (distToA <= toleranceMeters) nearPointA = true;
+                    if (distToB <= toleranceMeters) nearPointB = true;
+                    
+                    if (nearPointA && nearPointB) {
+                        return polyline; // This polyline connects both points
+                    }
+                }
+            }
+            
+            return null;
+        }
+
+        // Get coordinates along a segment between two specific points
+        function getCoordinatesBetweenPoints(polyline, pointA, pointB) {
+            const coords = polyline.getLatLngs();
+            const tolerance = 0.0002 * 111000; // ~22 meters
+            
+            let startIndex = -1;
+            let endIndex = -1;
+            
+            // Find the indices closest to pointA and pointB
+            for (let i = 0; i < coords.length; i++) {
+                const coord = coords[i];
+                
+                const distToA = calculateDistance(pointA.lat, pointA.lng, coord.lat, coord.lng);
+                const distToB = calculateDistance(pointB.lat, pointB.lng, coord.lat, coord.lng);
+                
+                if (distToA <= tolerance && startIndex === -1) {
+                    startIndex = i;
+                }
+                if (distToB <= tolerance) {
+                    endIndex = i;
+                }
+            }
+            
+            if (startIndex !== -1 && endIndex !== -1 && startIndex !== endIndex) {
+                // Extract coordinates between the two points
+                const start = Math.min(startIndex, endIndex);
+                const end = Math.max(startIndex, endIndex);
+                
+                return coords.slice(start, end + 1).map(coord => [coord.lat, coord.lng]);
+            }
+            
+            // Fallback: return just the two endpoint coordinates
+            return [[pointA.lat, pointA.lng], [pointB.lat, pointB.lng]];
         }
 
     </script>
