@@ -294,6 +294,7 @@
             <button onclick="toggleEnhancedDetection()" id="enhancedBtn">🎯 Enhanced Detection</button>
             <button onclick="debugSpecificCell()" id="debugCellBtn">🔬 Debug Cell Intersection</button>
             <button onclick="toggleSegmentMode()" id="segmentBtn">🛣️ Segment Mode (Prototype)</button>
+            <button onclick="startTestWalk()" id="testWalkBtn">🚶‍♂️ Test Walk Simulation</button>
             <button onclick="clearGrid()">🧹 Clear Grid</button>
         </div>
 
@@ -1296,6 +1297,14 @@ Longitude: Like -74.0060 (East/West)`;
         let segmentMode = false;
         let segmentLayers = [];
         let walkedSegments = new Set(); // Store IDs of segments that have been "walked"
+        let subSegments = []; // Store subdivided segments for granular tracking
+        
+        // Test walk variables
+        let testWalkActive = false;
+        let testWalkMarker = null;
+        let testWalkPath = [];
+        let testWalkInterval = null;
+        let currentWalkPosition = 0;
 
         // Toggle raw OSM data overlay on the map
         async function toggleRawDataOverlay() {
@@ -1949,24 +1958,19 @@ Longitude: Like -74.0060 (East/West)`;
 
         // Render all walkable segments as interactive polylines
         async function renderWalkableSegments() {
-            try {
-                const center = map.getCenter();
-                const bounds = map.getBounds();
-                const radius = calculateRadius(bounds);
-                
-                console.log(`Loading walkable segments within ${radius}m of ${center.lat.toFixed(6)}, ${center.lng.toFixed(6)}`);
-                
-                // Get OSM data for walkable areas
-                const osmData = await queryWalkableAreas(center.lat, center.lng, radius);
-                if (!osmData || !osmData.elements) {
-                    throw new Error('Failed to load OSM data - no elements received');
-                }
-                
-                console.log(`Received ${osmData.elements.length} OSM elements for segment processing`);
-            } catch (error) {
-                console.error('Error in renderWalkableSegments:', error);
-                throw error;
+            const center = map.getCenter();
+            const bounds = map.getBounds();
+            const radius = calculateRadius(bounds);
+            
+            console.log(`Loading walkable segments within ${radius}m of ${center.lat.toFixed(6)}, ${center.lng.toFixed(6)}`);
+            
+            // Get OSM data for walkable areas
+            const osmData = await queryWalkableAreas(center.lat, center.lng, radius);
+            if (!osmData || !osmData.elements) {
+                throw new Error('Failed to load OSM data - no elements received');
             }
+            
+            console.log(`Received ${osmData.elements.length} OSM elements for segment processing`);
             
             // Clear existing segment overlays
             clearSegmentOverlays();
@@ -2000,15 +2004,25 @@ Longitude: Like -74.0060 (East/West)`;
                         const isNearRestrictedArea = checkIfPathNearRestrictedAreas(element, restrictedAreas);
                         if (isNearRestrictedArea) continue;
                         
-                        // Create polyline for this segment
-                        const coordinates = element.geometry.map(node => [node.lat, node.lon]);
-                        const segmentId = `segment_${element.id}`;
+                                            // Create coordinates and subdivide if necessary
+                    const coordinates = element.geometry.map(node => [node.lat, node.lon]);
+                    const segmentId = `segment_${element.id}`;
+                    
+                    // Validate coordinates
+                    if (coordinates.length < 2) {
+                        console.log(`Skipping segment ${segmentId} - insufficient coordinates`);
+                        continue;
+                    }
+                    
+                    // Break long segments into smaller chunks (max ~50m per chunk)
+                    const subSegmentCoords = subdivideSegment(coordinates, 50);
+                    
+                    // Create multiple polylines for subdivided segments
+                    for (let subIndex = 0; subIndex < subSegmentCoords.length; subIndex++) {
+                        const subCoords = subSegmentCoords[subIndex];
+                        const subSegmentId = `${segmentId}_sub_${subIndex}`;
                         
-                        // Validate coordinates
-                        if (coordinates.length < 2) {
-                            console.log(`Skipping segment ${segmentId} - insufficient coordinates`);
-                            continue;
-                        }
+                        if (subCoords.length < 2) continue;
                         
                         // Determine segment type and color
                         let color = '#94a3b8'; // Default gray (not walked)
@@ -2030,17 +2044,18 @@ Longitude: Like -74.0060 (East/West)`;
                             opacity = 1.0;
                         }
                         
-                        const polyline = L.polyline(coordinates, {
+                        const polyline = L.polyline(subCoords, {
                             color: color,
                             weight: weight,
                             opacity: opacity,
                             lineJoin: 'round',
-                            lineCap: 'round'
+                            lineCap: 'round',
+                            segmentId: subSegmentId  // Store ID for test walk
                         });
                         
                         // Add click handler to mark as walked
                         polyline.on('click', () => {
-                            markSegmentAsWalked(segmentId, polyline, tags);
+                            markSegmentAsWalked(subSegmentId, polyline, tags);
                         });
                         
                         // Add tooltip
@@ -2147,6 +2162,181 @@ Longitude: Like -74.0060 (East/West)`;
             // Return radius as half the diagonal, with min/max bounds
             const radius = Math.max(500, Math.min(5000, Math.round(distance * 500))); // 500m to 5km
             return radius;
+        }
+
+        // Subdivide long segments into smaller chunks for granular tracking
+        function subdivideSegment(coordinates, maxDistanceMeters) {
+            if (coordinates.length < 2) return [coordinates];
+            
+            const subSegments = [];
+            let currentSegment = [coordinates[0]];
+            
+            for (let i = 1; i < coordinates.length; i++) {
+                const prevPoint = coordinates[i - 1];
+                const currentPoint = coordinates[i];
+                
+                // Calculate distance between consecutive points
+                const distance = calculateDistance(
+                    prevPoint[0], prevPoint[1],
+                    currentPoint[0], currentPoint[1]
+                );
+                
+                if (distance > maxDistanceMeters && currentSegment.length > 1) {
+                    // Start a new segment
+                    subSegments.push([...currentSegment]);
+                    currentSegment = [prevPoint, currentPoint];
+                } else {
+                    // Add to current segment
+                    currentSegment.push(currentPoint);
+                }
+            }
+            
+            // Add the final segment
+            if (currentSegment.length > 1) {
+                subSegments.push(currentSegment);
+            }
+            
+            return subSegments.length > 0 ? subSegments : [coordinates];
+        }
+
+        // Start test walk simulation
+        function startTestWalk() {
+            if (!map || !segmentMode || segmentLayers.length === 0) {
+                alert('Please enable Segment Mode first and ensure segments are loaded!');
+                return;
+            }
+
+            const button = document.getElementById('testWalkBtn');
+            
+            if (testWalkActive) {
+                // Stop test walk
+                stopTestWalk();
+                button.textContent = '🚶‍♂️ Test Walk Simulation';
+                button.style.background = '';
+                return;
+            }
+
+            // Start test walk
+            testWalkActive = true;
+            button.textContent = '⏹️ Stop Test Walk';
+            button.style.background = '#ef4444';
+            
+            // Create a walking route from available segments
+            createTestWalkRoute();
+            
+            if (testWalkPath.length === 0) {
+                alert('No walkable path found for test walk!');
+                stopTestWalk();
+                return;
+            }
+            
+            console.log(`🚶‍♂️ Starting test walk with ${testWalkPath.length} waypoints`);
+            
+            // Create walking marker
+            testWalkMarker = L.marker(testWalkPath[0], {
+                icon: L.divIcon({
+                    html: '🚶‍♂️',
+                    iconSize: [20, 20],
+                    className: 'test-walk-marker'
+                })
+            }).addTo(map);
+            
+            // Start walking animation
+            currentWalkPosition = 0;
+            testWalkInterval = setInterval(moveTestWalker, 500); // Move every 500ms
+        }
+
+        // Create a test walking route from available segments
+        function createTestWalkRoute() {
+            testWalkPath = [];
+            
+            // Find segments that form a connected path
+            const availableSegments = segmentLayers.slice(0, Math.min(10, segmentLayers.length));
+            
+            for (const layer of availableSegments) {
+                const coords = layer.getLatLngs();
+                for (const coord of coords) {
+                    testWalkPath.push([coord.lat, coord.lng]);
+                }
+            }
+            
+            console.log(`Created test walk route with ${testWalkPath.length} waypoints`);
+        }
+
+        // Move the test walker along the path
+        function moveTestWalker() {
+            if (!testWalkActive || currentWalkPosition >= testWalkPath.length - 1) {
+                stopTestWalk();
+                return;
+            }
+            
+            currentWalkPosition++;
+            const newPosition = testWalkPath[currentWalkPosition];
+            
+            // Move marker
+            testWalkMarker.setLatLng(newPosition);
+            
+            // Check for segment intersections and mark as walked
+            checkAndMarkNearbySegments(newPosition[0], newPosition[1]);
+            
+            // Update progress
+            const progress = ((currentWalkPosition / testWalkPath.length) * 100).toFixed(1);
+            console.log(`🚶‍♂️ Test walk progress: ${progress}%`);
+        }
+
+        // Check for nearby segments and mark them as walked
+        function checkAndMarkNearbySegments(lat, lng) {
+            const walkRadius = 15; // 15 meters
+            
+            for (const layer of segmentLayers) {
+                const coords = layer.getLatLngs();
+                
+                // Check if walker is close to any point on this segment
+                for (const coord of coords) {
+                    const distance = calculateDistance(lat, lng, coord.lat, coord.lng);
+                    
+                    if (distance < walkRadius) {
+                        // Mark this segment as walked
+                        const segmentId = layer.options.segmentId || `auto_${Date.now()}_${Math.random()}`;
+                        
+                        if (!walkedSegments.has(segmentId)) {
+                            walkedSegments.add(segmentId);
+                            
+                            // Update visual style
+                            layer.setStyle({
+                                color: '#22c55e', // Green for walked
+                                weight: 6,
+                                opacity: 1.0
+                            });
+                            
+                            console.log(`✅ Auto-marked segment as walked: ${segmentId}`);
+                            updateSegmentStats();
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Stop test walk simulation
+        function stopTestWalk() {
+            testWalkActive = false;
+            
+            if (testWalkInterval) {
+                clearInterval(testWalkInterval);
+                testWalkInterval = null;
+            }
+            
+            if (testWalkMarker) {
+                map.removeLayer(testWalkMarker);
+                testWalkMarker = null;
+            }
+            
+            const button = document.getElementById('testWalkBtn');
+            button.textContent = '🚶‍♂️ Test Walk Simulation';
+            button.style.background = '';
+            
+            console.log('🛑 Test walk stopped');
         }
 
         // Keyboard shortcuts for easier testing
