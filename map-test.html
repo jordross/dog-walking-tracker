@@ -2222,11 +2222,16 @@ Longitude: Like -74.0060 (East/West)`;
                                 );
                             }
                             
+                            console.log(`🔧 Segment length: ${length.toFixed(1)}m (${segment.length} points)`);
+                            
                             // If segment is too long (>60m), subdivide it
                             if (length > 60) {
+                                console.log(`✂️ Subdividing ${length.toFixed(1)}m segment into 45m chunks`);
                                 const subdivided = subdivideSegmentByDistance(segment, 45); // 45m max chunks
+                                console.log(`✂️ Result: ${subdivided.length} sub-segments`);
                                 finalSegments.push(...subdivided);
                             } else {
+                                console.log(`✅ Keeping ${length.toFixed(1)}m segment as-is`);
                                 finalSegments.push(segment);
                             }
                         }
@@ -3127,6 +3132,32 @@ Longitude: Like -74.0060 (East/West)`;
             });
         }
         
+        // Filter out duplicate or overlapping blocks
+        function filterUniqueBlocks(blocks) {
+            const unique = [];
+            const tolerance = 50; // 50 meter tolerance for considering blocks the same
+            
+            for (const block of blocks) {
+                const blockCenter = getPolygonCenter(block.coordinates || []);
+                
+                // Check if this block is too close to an existing one
+                const isDuplicate = unique.some(existing => {
+                    const existingCenter = getPolygonCenter(existing.coordinates || []);
+                    const distance = calculateDistance(
+                        blockCenter[0], blockCenter[1], 
+                        existingCenter[0], existingCenter[1]
+                    );
+                    return distance < tolerance;
+                });
+                
+                if (!isDuplicate) {
+                    unique.push(block);
+                }
+            }
+            
+            return unique;
+        }
+
         // Find blocks that have been completely walked around
         function findCompletedBlocks(completedSegmentIds) {
             const blocks = [];
@@ -4070,31 +4101,7 @@ Longitude: Like -74.0060 (East/West)`;
             return [lat / coords.length, lng / coords.length];
         }
         
-        // Filter out duplicate or overlapping blocks
-        function filterUniqueBlocks(blocks) {
-            const unique = [];
-            const tolerance = 50; // 50 meter tolerance for considering blocks the same
-            
-            for (const block of blocks) {
-                const blockCenter = getPolygonCenter(block.polygon ? block.polygon.map(p => [p.lat, p.lng]) : []);
-                
-                // Check if this block is too close to an existing one
-                const isDuplicate = unique.some(existing => {
-                    const existingCenter = getPolygonCenter(existing.polygon ? existing.polygon.map(p => [p.lat, p.lng]) : []);
-                    const distance = calculateDistance(
-                        blockCenter[0], blockCenter[1], 
-                        existingCenter[0], existingCenter[1]
-                    );
-                    return distance < tolerance;
-                });
-                
-                if (!isDuplicate) {
-                    unique.push(block);
-                }
-            }
-            
-            return unique;
-        }
+
         
         // Update block area statistics and display
         function updateBlockAreaStats() {
