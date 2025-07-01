@@ -2696,7 +2696,7 @@ Longitude: Like -74.0060 (East/West)`;
         // Simplified approach: Roads with sidewalks + Parks for discovery
         
         // Modify the segment button to use simplified rendering
-        document.getElementById('segmentBtn').onclick = function() {
+        document.getElementById('segmentBtn').onclick = async function() {
             if (segmentMode) {
                 clearSegmentOverlays();
                 this.textContent = '🗺️ Segment Mode: OFF';
@@ -2704,11 +2704,16 @@ Longitude: Like -74.0060 (East/West)`;
                 segmentMode = false;
                 console.log('Segment mode disabled');
             } else {
-                renderSimplifiedGameSegments(); // Use new simplified function
-                this.textContent = '🗺️ Segment Mode: ON';
-                this.style.backgroundColor = '#10b981';
-                segmentMode = true;
-                console.log('Simplified gamification mode enabled');
+                try {
+                    await renderSimplifiedGameSegments(); // Use new simplified function
+                    this.textContent = '🗺️ Segment Mode: ON';
+                    this.style.backgroundColor = '#10b981';
+                    segmentMode = true;
+                    console.log('Simplified gamification mode enabled');
+                } catch (error) {
+                    console.error('Error enabling simplified mode:', error);
+                    alert('Failed to load simplified mode. Please try again.');
+                }
             }
         };
 
@@ -2857,28 +2862,33 @@ Longitude: Like -74.0060 (East/West)`;
         }
 
         // Toggle between complex and simplified gamification modes
-        function toggleGameMode() {
+        async function toggleGameMode() {
             const gameBtn = document.getElementById('gameBtn');
             const segmentBtn = document.getElementById('segmentBtn');
             
-            if (segmentMode) {
-                // Already in segment mode, just switch to simplified
-                clearSegmentOverlays();
-                renderSimplifiedGameSegments();
-                gameBtn.textContent = '🎮 Simple Game Mode: ON';
-                gameBtn.style.backgroundColor = '#10b981';
-                segmentBtn.textContent = '🛣️ Segment Mode: OFF';
-                segmentBtn.style.backgroundColor = '#6b7280';
-                console.log('Switched to simplified gamification mode');
-            } else {
-                // Enable simplified mode
-                renderSimplifiedGameSegments();
-                segmentMode = true;
-                gameBtn.textContent = '🎮 Simple Game Mode: ON';
-                gameBtn.style.backgroundColor = '#10b981';
-                segmentBtn.textContent = '🛣️ Segment Mode: OFF';
-                segmentBtn.style.backgroundColor = '#6b7280';
-                console.log('Enabled simplified gamification mode');
+            try {
+                if (segmentMode) {
+                    // Already in segment mode, just switch to simplified
+                    clearSegmentOverlays();
+                    await renderSimplifiedGameSegments();
+                    gameBtn.textContent = '🎮 Simple Game Mode: ON';
+                    gameBtn.style.backgroundColor = '#10b981';
+                    segmentBtn.textContent = '��️ Segment Mode: OFF';
+                    segmentBtn.style.backgroundColor = '#6b7280';
+                    console.log('Switched to simplified gamification mode');
+                } else {
+                    // Enable simplified mode
+                    await renderSimplifiedGameSegments();
+                    segmentMode = true;
+                    gameBtn.textContent = '🎮 Simple Game Mode: ON';
+                    gameBtn.style.backgroundColor = '#10b981';
+                    segmentBtn.textContent = '🛣️ Segment Mode: OFF';
+                    segmentBtn.style.backgroundColor = '#6b7280';
+                    console.log('Enabled simplified gamification mode');
+                }
+            } catch (error) {
+                console.error('Error in toggleGameMode:', error);
+                alert('Failed to toggle game mode. Please try again.');
             }
         }
 
