@@ -249,6 +249,7 @@
             <ul>
                 <li>Enter your coordinates or click "📍 Use My Location"</li>
                 <li>Click "🗺️ Load Map" to visualize your area</li>
+                <li>Pan/zoom the map to explore, then click "🎯 Set Center Here" to update GPS center</li>
                 <li>Click "⬜ Generate Grid" to create the test grid</li>
                 <li>Click grid cells to cycle through: Unknown → Walkable → Non-walkable</li>
                 <li>Observe how coverage percentage changes as you classify areas</li>
@@ -285,6 +286,7 @@
             
             <button onclick="getCurrentLocation()">📍 Use My Location</button>
             <button onclick="showLocationHelp()">❓ Need Coordinates?</button>
+            <button onclick="setCenterFromMap()" id="setCenterBtn" disabled>🎯 Set Center Here</button>
             <button onclick="loadMap()">🗺️ Load Map</button>
             <button onclick="generateGrid()">⬜ Generate Grid</button>
             <button onclick="autoDetectWalkable()" id="autoDetectBtn">🤖 Auto-Detect Walkable Areas</button>
@@ -535,6 +537,64 @@ Longitude: Like -74.0060 (East/West)`;
             }).addTo(map).bindPopup(`Search radius: ${radius}m`);
 
             console.log(`Real map loaded for coordinates: ${lat}, ${lng} with ${radius}m radius`);
+            
+            // Enable the "Set Center Here" button once map is loaded
+            document.getElementById('setCenterBtn').disabled = false;
+        }
+
+        function setCenterFromMap() {
+            if (!map) {
+                alert('Please load the map first!');
+                return;
+            }
+
+            // Get current map center
+            const center = map.getCenter();
+            
+            // Update the input fields with current map center
+            document.getElementById('latitude').value = center.lat.toFixed(6);
+            document.getElementById('longitude').value = center.lng.toFixed(6);
+            
+            // Clear existing marker and add new one at current center
+            map.eachLayer(layer => {
+                if (layer instanceof L.Marker) {
+                    map.removeLayer(layer);
+                }
+            });
+            
+            // Add marker at new center
+            const radius = parseInt(document.getElementById('radius').value);
+            L.marker([center.lat, center.lng])
+                .addTo(map)
+                .bindPopup(`📍 New Center<br>${center.lat.toFixed(4)}, ${center.lng.toFixed(4)}`)
+                .openPopup();
+
+            // Update the radius circle
+            map.eachLayer(layer => {
+                if (layer instanceof L.Circle) {
+                    map.removeLayer(layer);
+                }
+            });
+            
+            L.circle([center.lat, center.lng], {
+                color: '#4f46e5',
+                fillColor: '#4f46e5',
+                fillOpacity: 0.1,
+                radius: radius
+            }).addTo(map).bindPopup(`Search radius: ${radius}m`);
+
+            // Visual feedback
+            const button = document.getElementById('setCenterBtn');
+            const originalText = button.textContent;
+            button.textContent = '✅ Center Updated!';
+            button.style.background = '#22c55e';
+            
+            setTimeout(() => {
+                button.textContent = originalText;
+                button.style.background = '';
+            }, 2000);
+
+            console.log(`Center updated to: ${center.lat.toFixed(6)}, ${center.lng.toFixed(6)}`);
         }
 
         function generateGrid() {
@@ -2148,22 +2208,12 @@ Longitude: Like -74.0060 (East/West)`;
                             continue;
                         }
                         
-                        // Split segments at intersections for visual appeal
-                        const segmentChunks = splitAtIntersections(coordinates, intersections);
-                        
-                        // Further subdivide long segments (max 30m for better granularity) and merge tiny ones
-                        const finalSegments = [];
-                        for (const chunk of segmentChunks) {
-                            const subChunks = subdivideSegmentByDistance(chunk, 30); // Smaller max length
-                            finalSegments.push(...subChunks);
-                        }
-                        
-                        // Merge tiny segments with adjacent ones
-                        const mergedSegments = mergeTinySegments(finalSegments, 6); // Merge segments under 6m
+                        // Smart segment processing: balance between avoiding intersections and reasonable lengths
+                        const smartSegments = createSmartSegments(coordinates, intersections, tags);
                         
                         // Create polylines for each segment - now filter by radius AFTER subdivision
-                        for (let chunkIndex = 0; chunkIndex < mergedSegments.length; chunkIndex++) {
-                            const chunkCoords = mergedSegments[chunkIndex];
+                        for (let chunkIndex = 0; chunkIndex < smartSegments.length; chunkIndex++) {
+                            const chunkCoords = smartSegments[chunkIndex];
                             const segmentId = `segment_${element.id}_${chunkIndex}`;
                             
                             if (chunkCoords.length < 2) continue;
@@ -2260,6 +2310,148 @@ Longitude: Like -74.0060 (East/West)`;
             console.log(`🚶 Prioritized ${allSidewalks.length} sidewalks over ${allRoads.length} roads`);
             console.log(`🏪 Filtered out businesses and commercial areas`);
             updateSegmentStats();
+        }
+
+        // Smart segment creation that balances intersection avoidance with reasonable lengths
+        function createSmartSegments(coordinates, intersections, tags) {
+            if (coordinates.length < 2) return [coordinates];
+            
+            const isMainRoad = tags.highway && tags.highway.match(/^(primary|secondary|tertiary|residential)$/);
+            const isMinorPath = tags.highway === 'footway' || tags.highway === 'path' || tags.highway === 'service';
+            
+            // Target segment lengths based on way type
+            const targetMin = isMainRoad ? 20 : isMinorPath ? 15 : 18; // Minimum reasonable length
+            const targetMax = isMainRoad ? 50 : isMinorPath ? 35 : 40; // Maximum before forced split
+            const idealLength = isMainRoad ? 35 : isMinorPath ? 25 : 30; // Preferred length
+            
+            // Step 1: Identify REAL intersections (not just any shared node)
+            const realIntersections = new Set();
+            for (let i = 1; i < coordinates.length - 1; i++) {
+                const coord = coordinates[i];
+                const nodeId = `${coord[0].toFixed(6)},${coord[1].toFixed(6)}`;
+                
+                // Only split at intersections that are significant (skip tiny service connections)
+                if (intersections.has(nodeId)) {
+                    realIntersections.add(i); // Store array index, not coordinate
+                }
+            }
+            
+            // Step 2: Create initial segments respecting major intersections
+            const preliminarySegments = [];
+            let currentStart = 0;
+            
+            for (const intersectionIndex of Array.from(realIntersections).sort((a, b) => a - b)) {
+                if (intersectionIndex > currentStart) {
+                    preliminarySegments.push(coordinates.slice(currentStart, intersectionIndex + 1));
+                    currentStart = intersectionIndex;
+                }
+            }
+            
+            // Add final segment
+            if (currentStart < coordinates.length - 1) {
+                preliminarySegments.push(coordinates.slice(currentStart));
+            }
+            
+            // Step 3: Intelligently adjust segment lengths
+            const finalSegments = [];
+            
+            for (let segmentCoords of preliminarySegments) {
+                if (segmentCoords.length < 2) continue;
+                
+                let segmentLength = calculateSegmentLength(segmentCoords);
+                
+                if (segmentLength <= targetMax) {
+                    // Segment is reasonable length, keep as-is
+                    finalSegments.push(segmentCoords);
+                } else {
+                    // Segment too long, need to subdivide
+                    const numParts = Math.ceil(segmentLength / idealLength);
+                    const subdivided = subdivideSegmentIntoEqualParts(segmentCoords, numParts);
+                    finalSegments.push(...subdivided);
+                }
+            }
+            
+            // Step 4: Merge segments that are too short with adjacent ones
+            const mergedSegments = [];
+            for (let i = 0; i < finalSegments.length; i++) {
+                const segment = finalSegments[i];
+                const segmentLength = calculateSegmentLength(segment);
+                
+                if (segmentLength < targetMin && i < finalSegments.length - 1) {
+                    // This segment is too short, try to merge with next
+                    const nextSegment = finalSegments[i + 1];
+                    const combinedCoords = [...segment];
+                    
+                    // Remove duplicate connection point and add rest of next segment
+                    if (nextSegment.length > 1) {
+                        combinedCoords.push(...nextSegment.slice(1));
+                    }
+                    
+                    const combinedLength = calculateSegmentLength(combinedCoords);
+                    
+                    if (combinedLength <= targetMax) {
+                        // Good merge, use combined segment and skip next iteration
+                        mergedSegments.push(combinedCoords);
+                        i++; // Skip the next segment since we merged it
+                    } else {
+                        // Combined would be too long, keep original segments
+                        mergedSegments.push(segment);
+                    }
+                } else {
+                    // Segment is fine as-is
+                    mergedSegments.push(segment);
+                }
+            }
+            
+            return mergedSegments.length > 0 ? mergedSegments : [coordinates];
+        }
+        
+        // Helper function to calculate total length of a segment
+        function calculateSegmentLength(coordinates) {
+            let length = 0;
+            for (let i = 1; i < coordinates.length; i++) {
+                length += calculateDistance(
+                    coordinates[i-1][0], coordinates[i-1][1],
+                    coordinates[i][0], coordinates[i][1]
+                );
+            }
+            return length;
+        }
+        
+        // Helper function to subdivide a segment into equal parts
+        function subdivideSegmentIntoEqualParts(coordinates, numParts) {
+            if (numParts <= 1 || coordinates.length < 2) return [coordinates];
+            
+            const totalLength = calculateSegmentLength(coordinates);
+            const targetPartLength = totalLength / numParts;
+            
+            const parts = [];
+            let currentPart = [coordinates[0]];
+            let currentPartLength = 0;
+            
+            for (let i = 1; i < coordinates.length; i++) {
+                const stepLength = calculateDistance(
+                    coordinates[i-1][0], coordinates[i-1][1],
+                    coordinates[i][0], coordinates[i][1]
+                );
+                
+                currentPartLength += stepLength;
+                currentPart.push(coordinates[i]);
+                
+                // If we've reached target length and have more parts to create
+                if (currentPartLength >= targetPartLength && parts.length < numParts - 1) {
+                    parts.push([...currentPart]);
+                    currentPart = [coordinates[i]]; // Start new part with this point
+                    currentPartLength = 0;
+                }
+            }
+            
+            // Add final part
+            if (currentPart.length > 1) {
+                parts.push(currentPart);
+            }
+            
+            return parts.length > 0 ? parts : [coordinates];
         }
 
         // Merge tiny segments with adjacent ones to reduce intersection artifacts
@@ -3239,7 +3431,7 @@ Longitude: Like -74.0060 (East/West)`;
             const pathSet = new Set([startKey]);
             
             function dfs(currentKey, depth) {
-                if (depth > 8) return; // Prevent infinite loops, max 8 segments per block
+                if (depth > 6) return; // Reduce max depth for simpler blocks
                 
                 const currentNode = graph.get(currentKey);
                 if (!currentNode) return;
@@ -3248,10 +3440,16 @@ Longitude: Like -74.0060 (East/West)`;
                     const nextKey = connection.to;
                     
                     // Found a loop back to start
-                    if (nextKey === startKey && path.length >= 3) {
-                        const loopPoints = createLoopFromPath(graph, path);
+                    if (nextKey === startKey && path.length >= 3 && path.length <= 6) {
+                        console.log(`🔄 Found potential loop: ${path.join(' -> ')} -> ${startKey}`);
+                        const loopPoints = createLoopFromPath(graph, [...path, startKey]);
+                        console.log(`🔄 Loop generated ${loopPoints.length} points`);
+                        
                         if (loopPoints.length >= 3) {
                             loops.push(loopPoints);
+                            console.log(`✅ Valid loop added with ${loopPoints.length} points`);
+                        } else {
+                            console.log(`❌ Loop rejected - only ${loopPoints.length} points`);
                         }
                         continue;
                     }
@@ -3277,22 +3475,35 @@ Longitude: Like -74.0060 (East/West)`;
         function createLoopFromPath(graph, path) {
             const loopPoints = [];
             
+            console.log(`🔧 Creating loop from path with ${path.length} nodes`);
+            
             for (let i = 0; i < path.length; i++) {
                 const currentKey = path[i];
                 const nextKey = path[(i + 1) % path.length];
                 
                 const currentNode = graph.get(currentKey);
-                if (!currentNode) continue;
+                if (!currentNode) {
+                    console.warn(`Missing node: ${currentKey}`);
+                    continue;
+                }
                 
                 // Find the connection to the next node
                 const connection = currentNode.connections.find(conn => conn.to === nextKey);
-                if (connection && connection.roadPoints) {
+                if (connection && connection.roadPoints && connection.roadPoints.length > 0) {
                     // Add all points along this road segment (except the last to avoid duplicates)
                     const points = connection.roadPoints.slice(0, -1);
                     loopPoints.push(...points);
+                    console.log(`Added ${points.length} points from segment ${currentKey} -> ${nextKey}`);
+                } else {
+                    console.warn(`No connection found: ${currentKey} -> ${nextKey}`);
+                    // Fallback: add the intersection points directly
+                    if (currentNode.point) {
+                        loopPoints.push(currentNode.point);
+                    }
                 }
             }
             
+            console.log(`🔧 Total loop points: ${loopPoints.length}`);
             return loopPoints;
         }
         
@@ -3321,8 +3532,18 @@ Longitude: Like -74.0060 (East/West)`;
         
         // Check if a polygon is a valid block size
         function isValidBlockSize(polygon) {
+            if (!polygon || polygon.length < 3) {
+                console.warn('Invalid polygon for size check:', polygon);
+                return false;
+            }
+            
             const area = calculatePolygonArea(polygon);
-            return area > 1000 && area < 50000; // Between ~1000m² and ~50000m² (reasonable block sizes)
+            console.log(`🔧 Block area calculated: ${area}m²`);
+            
+            // Be more lenient with block sizes - allow smaller blocks too
+            const isValid = area > 200 && area < 100000; // Between ~200m² and ~100000m² 
+            console.log(`🔧 Block size valid: ${isValid} (${area}m²)`);
+            return isValid;
         }
         
         // Calculate polygon area using shoelace formula
