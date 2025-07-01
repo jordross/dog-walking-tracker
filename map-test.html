@@ -2057,14 +2057,15 @@ Longitude: Like -74.0060 (East/West)`;
                 for (const sidewalk of allSidewalks) {
                     const sidewalkCoords = sidewalk.geometry.map(node => [node.lat, node.lon]);
                     
-                    // Check if any point on the road is within 25m of any point on a sidewalk
+                    // Check if any point on the road is within 20m of any point on a sidewalk
+                    // Reduced from 25m to be less aggressive near commercial areas
                     for (const roadCoord of roadCoords) {
                         for (const sidewalkCoord of sidewalkCoords) {
                             const distance = calculateDistance(
                                 roadCoord[0], roadCoord[1],
                                 sidewalkCoord[0], sidewalkCoord[1]
                             );
-                            if (distance <= 25) { // 25m proximity threshold
+                            if (distance <= 20) { // Reduced proximity threshold
                                 return true;
                             }
                         }
@@ -2079,17 +2080,17 @@ Longitude: Like -74.0060 (East/West)`;
                     if (element.type === 'way' && element.geometry && element.geometry.length >= 2) {
                         const tags = element.tags || {};
                         
-                        // Skip restricted elements and businesses
+                        // Skip restricted elements and businesses (more targeted filtering)
                         const isRestrictedElement = tags.fee === 'yes' || tags.access === 'private' || 
                                                   tags.access === 'no' || tags.access === 'customers' ||
                                                   tags.landuse === 'military' || tags.dog === 'no' ||
-                                                  // Business filtering
-                                                  tags.amenity === 'fuel' || tags.amenity === 'gas_station' ||
-                                                  tags.shop || tags.amenity === 'restaurant' || tags.amenity === 'fast_food' ||
-                                                  tags.amenity === 'cafe' || tags.amenity === 'bank' || tags.amenity === 'pharmacy' ||
-                                                  tags.building === 'commercial' || tags.landuse === 'commercial' ||
-                                                  tags.landuse === 'retail' || tags.landuse === 'industrial' ||
-                                                  // Gas station specific filtering
+                                                  // Only filter actual business properties, not nearby roads
+                                                  (tags.amenity === 'fuel' || tags.amenity === 'gas_station') ||
+                                                  (tags.building === 'commercial' && !tags.highway) || // Commercial buildings only
+                                                  (tags.landuse === 'commercial' && !tags.highway) || // Commercial land use only
+                                                  (tags.landuse === 'retail' && !tags.highway) || // Retail land use only
+                                                  (tags.landuse === 'industrial' && !tags.highway) || // Industrial land use only
+                                                  // Gas station specific filtering - only service roads with direct business connection
                                                   (tags.highway === 'service' && tags.service === 'driveway') ||
                                                   (tags.highway === 'service' && tags.service === 'parking_aisle') ||
                                                   (tags.highway === 'service' && tags.amenity) || // Service road with any amenity
@@ -2101,14 +2102,14 @@ Longitude: Like -74.0060 (East/West)`;
                         const isNearRestrictedArea = checkIfPathNearRestrictedAreas(element, restrictedAreas);
                         if (isNearRestrictedArea) continue;
                         
-                        // Check if within radius - be more lenient for edge coverage
+                        // Initial check - only exclude ways that are completely outside radius
                         const coordinates = element.geometry.map(node => [node.lat, node.lon]);
-                        const hasPointInRadius = coordinates.some(coord => {
+                        const hasAnyPointInRadius = coordinates.some(coord => {
                             const distance = calculateDistance(center.lat, center.lng, coord[0], coord[1]);
-                            return distance <= radius * 1.1; // 10% buffer for better edge coverage
+                            return distance <= radius * 1.5; // Large buffer for initial filtering
                         });
                         
-                        if (!hasPointInRadius) {
+                        if (!hasAnyPointInRadius) {
                             filteredCount++;
                             continue;
                         }
@@ -2139,22 +2140,30 @@ Longitude: Like -74.0060 (East/West)`;
                         // Split segments at intersections for visual appeal
                         const segmentChunks = splitAtIntersections(coordinates, intersections);
                         
-                        // Further subdivide long segments (max 40m) and merge tiny ones
+                        // Further subdivide long segments (max 30m for better granularity) and merge tiny ones
                         const finalSegments = [];
                         for (const chunk of segmentChunks) {
-                            const subChunks = subdivideSegmentByDistance(chunk, 40);
+                            const subChunks = subdivideSegmentByDistance(chunk, 30); // Smaller max length
                             finalSegments.push(...subChunks);
                         }
                         
                         // Merge tiny segments with adjacent ones
-                        const mergedSegments = mergeTinySegments(finalSegments, 8); // Merge segments under 8m
+                        const mergedSegments = mergeTinySegments(finalSegments, 6); // Merge segments under 6m
                         
-                        // Create polylines for each segment
+                        // Create polylines for each segment - now filter by radius AFTER subdivision
                         for (let chunkIndex = 0; chunkIndex < mergedSegments.length; chunkIndex++) {
                             const chunkCoords = mergedSegments[chunkIndex];
                             const segmentId = `segment_${element.id}_${chunkIndex}`;
                             
                             if (chunkCoords.length < 2) continue;
+                            
+                            // Check if this individual segment is within radius (after subdivision)
+                            const segmentInRadius = chunkCoords.some(coord => {
+                                const distance = calculateDistance(center.lat, center.lng, coord[0], coord[1]);
+                                return distance <= radius;
+                            });
+                            
+                            if (!segmentInRadius) continue; // Skip segments outside radius
                             
                             // Calculate actual segment length
                             let segmentLength = 0;
