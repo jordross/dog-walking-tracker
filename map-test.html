@@ -287,6 +287,7 @@
             <button onclick="generateGrid()">⬜ Generate Grid</button>
             <button onclick="autoDetectWalkable()" id="autoDetectBtn">🤖 Auto-Detect Walkable Areas</button>
             <button onclick="showRestrictedAreas()" id="restrictedBtn">🚫 Show Restricted Areas</button>
+            <button onclick="debugOSMData()" id="debugBtn">🔍 Debug OSM Data</button>
             <button onclick="clearGrid()">🧹 Clear Grid</button>
         </div>
 
@@ -827,11 +828,25 @@ Longitude: Like -74.0060 (East/West)`;
         function checkPointInRestrictedAreas(pointLat, pointLng, osmElements) {
             for (const element of osmElements) {
                 if (element.type === 'way' && element.geometry) {
-                    // Only check restricted elements
+                    // Enhanced restricted element detection
                     const tags = element.tags || {};
-                    const isRestrictedElement = tags.fee === 'yes' || tags.access === 'private' || 
-                                              tags.access === 'no' || tags.access === 'customers' ||
-                                              tags.landuse === 'military' || tags.dog === 'no';
+                    const isRestrictedElement = 
+                        tags.fee === 'yes' || 
+                        tags.access === 'private' || 
+                        tags.access === 'no' || 
+                        tags.access === 'customers' ||
+                        tags.landuse === 'military' || 
+                        tags.dog === 'no' ||
+                        // Additional fee-based attraction tags
+                        tags.admission ||
+                        (tags.leisure === 'garden' && tags.tourism) || // Botanical gardens that are tourist attractions
+                        (tags.tourism === 'attraction' && tags.leisure === 'garden') ||
+                        (tags.name && tags.name.toLowerCase().includes('botanical')) ||
+                        (tags.name && tags.name.toLowerCase().includes('vandusen')) ||
+                        // Common patterns for fee-based venues
+                        (tags.tourism === 'zoo') ||
+                        (tags.tourism === 'museum') ||
+                        (tags.tourism === 'theme_park');
                     
                     if (isRestrictedElement) {
                         // Check proximity to restricted areas
@@ -968,6 +983,200 @@ Longitude: Like -74.0060 (East/West)`;
             message += `\n💡 These areas are excluded from walkable detection because they have access restrictions that matter for everyday dog walking.`;
             
             alert(message);
+        }
+
+        // Debug function to show all OSM data in the area
+        async function debugOSMData() {
+            if (!map) {
+                alert('Please load the map first!');
+                return;
+            }
+
+            const button = document.getElementById('debugBtn');
+            const originalText = button.textContent;
+            button.textContent = '🔍 Gathering data...';
+            button.disabled = true;
+
+            try {
+                const center = map.getCenter();
+                const radius = parseInt(document.getElementById('radius').value);
+                
+                // Query for ALL relevant areas (walkable AND restricted)
+                const [walkableData, restrictedData] = await Promise.all([
+                    queryWalkableAreas(center.lat, center.lng, radius),
+                    queryRestrictedAreas(center.lat, center.lng, radius)
+                ]);
+                
+                // Also query specifically for botanical gardens, museums, etc.
+                const specialData = await querySpecialAreas(center.lat, center.lng, radius);
+                
+                // Combine and analyze
+                const allElements = [
+                    ...(walkableData?.elements || []),
+                    ...(restrictedData?.elements || []),
+                    ...(specialData?.elements || [])
+                ];
+                
+                displayOSMDebugInfo(allElements);
+                button.textContent = '✅ Data analyzed!';
+                
+            } catch (error) {
+                console.error('Debug error:', error);
+                button.textContent = '❌ Debug failed';
+            }
+            
+            setTimeout(() => {
+                button.textContent = originalText;
+                button.disabled = false;
+            }, 3000);
+        }
+
+        // Query for special fee-based areas that might use different tags
+        async function querySpecialAreas(lat, lng, radius) {
+            const overpassUrl = 'https://overpass-api.de/api/interpreter';
+            
+            const query = `
+                [out:json][timeout:25];
+                (
+                  // Botanical gardens, museums, attractions
+                  way["leisure"="garden"](around:${radius},${lat},${lng});
+                  way["tourism"~"^(attraction|museum|zoo|theme_park)$"](around:${radius},${lat},${lng});
+                  rel["leisure"="garden"](around:${radius},${lat},${lng});
+                  rel["tourism"~"^(attraction|museum|zoo|theme_park)$"](around:${radius},${lat},${lng});
+                  
+                  // Anything with admission fees using different tags
+                  way["admission"](around:${radius},${lat},${lng});
+                  rel["admission"](around:${radius},${lat},${lng});
+                  
+                  // Places with opening hours (often indicates restricted access)
+                  way["opening_hours"](around:${radius},${lat},${lng});
+                  rel["opening_hours"](around:${radius},${lat},${lng});
+                );
+                out geom;
+            `;
+
+            try {
+                const response = await fetch(overpassUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: 'data=' + encodeURIComponent(query)
+                });
+
+                const data = await response.json();
+                console.log('Special areas data:', data.elements?.length || 0, 'elements');
+                return data;
+                
+            } catch (error) {
+                console.error('Error querying special areas:', error);
+                return null;
+            }
+        }
+
+        // Display detailed OSM debug information
+        function displayOSMDebugInfo(elements) {
+            let debugInfo = `🔍 OSM Debug Report\n\n`;
+            debugInfo += `Found ${elements.length} total elements in your area:\n\n`;
+            
+            const categorizedElements = {
+                'Botanical Gardens': [],
+                'Tourism/Attractions': [],
+                'Parks/Recreation': [],
+                'Fee-based Areas': [],
+                'Access Restricted': [],
+                'Roads/Walkways': [],
+                'Other': []
+            };
+            
+            elements.forEach(element => {
+                const tags = element.tags || {};
+                const name = tags.name || 'Unnamed';
+                
+                if (tags.leisure === 'garden' || (tags.name && tags.name.toLowerCase().includes('garden'))) {
+                    categorizedElements['Botanical Gardens'].push({name, tags, element});
+                } else if (tags.tourism) {
+                    categorizedElements['Tourism/Attractions'].push({name, tags, element});
+                } else if (tags.fee === 'yes' || tags.admission) {
+                    categorizedElements['Fee-based Areas'].push({name, tags, element});
+                } else if (tags.access === 'private' || tags.access === 'no' || tags.access === 'customers') {
+                    categorizedElements['Access Restricted'].push({name, tags, element});
+                } else if (tags.leisure === 'park' || tags.landuse === 'recreation_ground') {
+                    categorizedElements['Parks/Recreation'].push({name, tags, element});
+                } else if (tags.highway) {
+                    categorizedElements['Roads/Walkways'].push({name, tags, element});
+                } else {
+                    categorizedElements['Other'].push({name, tags, element});
+                }
+            });
+            
+            for (const [category, items] of Object.entries(categorizedElements)) {
+                if (items.length > 0) {
+                    debugInfo += `📍 ${category} (${items.length}):\n`;
+                    items.slice(0, 5).forEach(item => { // Show first 5 items
+                        debugInfo += `  • ${item.name}\n`;
+                        debugInfo += `    Tags: ${Object.entries(item.tags).map(([k,v]) => `${k}=${v}`).join(', ')}\n`;
+                    });
+                    if (items.length > 5) {
+                        debugInfo += `  ... and ${items.length - 5} more\n`;
+                    }
+                    debugInfo += `\n`;
+                }
+            }
+            
+            // Specific analysis for VanDusen Gardens
+            const vandusenElements = elements.filter(el => 
+                el.tags?.name && el.tags.name.toLowerCase().includes('vandusen')
+            );
+            
+            if (vandusenElements.length > 0) {
+                debugInfo += `🌿 VanDusen Gardens Analysis:\n`;
+                vandusenElements.forEach(el => {
+                    debugInfo += `  • Name: ${el.tags.name}\n`;
+                    debugInfo += `  • All tags: ${JSON.stringify(el.tags, null, 2)}\n`;
+                });
+                debugInfo += `\n`;
+            }
+            
+            debugInfo += `💡 If VanDusen Gardens shows as green (walkable), it means OSM data doesn't include proper restriction tags like fee=yes or access=private.`;
+            
+            // Show in a scrollable dialog
+            const textarea = document.createElement('textarea');
+            textarea.value = debugInfo;
+            textarea.style.width = '80vw';
+            textarea.style.height = '60vh';
+            textarea.style.fontFamily = 'monospace';
+            textarea.style.fontSize = '12px';
+            
+            const modal = document.createElement('div');
+            modal.style.position = 'fixed';
+            modal.style.top = '0';
+            modal.style.left = '0';
+            modal.style.width = '100%';
+            modal.style.height = '100%';
+            modal.style.backgroundColor = 'rgba(0,0,0,0.8)';
+            modal.style.display = 'flex';
+            modal.style.alignItems = 'center';
+            modal.style.justifyContent = 'center';
+            modal.style.zIndex = '10000';
+            
+            const container = document.createElement('div');
+            container.style.backgroundColor = 'white';
+            container.style.padding = '20px';
+            container.style.borderRadius = '8px';
+            container.style.maxWidth = '90vw';
+            container.style.maxHeight = '90vh';
+            container.style.overflow = 'auto';
+            
+            const closeButton = document.createElement('button');
+            closeButton.textContent = '✕ Close';
+            closeButton.style.marginBottom = '10px';
+            closeButton.onclick = () => document.body.removeChild(modal);
+            
+            container.appendChild(closeButton);
+            container.appendChild(textarea);
+            modal.appendChild(container);
+            document.body.appendChild(modal);
         }
 
         // Calculate distance between two points in meters using Haversine formula
