@@ -2753,18 +2753,15 @@ Longitude: Like -74.0060 (East/West)`;
                             continue;
                         }
                         
-                        // FLIPPED LOGIC: Only include roads that HAVE sidewalks
+                        // SIMPLIFIED LOGIC: Include main roads (assuming they have sidewalks) and parks
                         if (isRoad) {
-                            if (!hasNearbySidewalk(element)) {
-                                filteredOut++;
-                                continue; // Skip roads without sidewalks
-                            }
+                            // For gamification, assume main roads have sidewalks - much simpler!
                             roadSegments++;
                         } else if (isPark) {
                             parkSegments++;
                             // Add park discovery logic here if desired
                         } else {
-                            continue; // Only roads-with-sidewalks and parks
+                            continue; // Only main roads and parks
                         }
                         
                         // Check if within radius
@@ -2851,8 +2848,8 @@ Longitude: Like -74.0060 (East/West)`;
                     }
                 }
                 
-                console.log(`🎮 Simplified gamification loaded: ${roadSegments} roads with sidewalks, ${parkSegments} parks`);
-                console.log(`🚫 Filtered out ${filteredOut} roads without sidewalks`);
+                console.log(`🎮 Simplified gamification loaded: ${roadSegments} main roads, ${parkSegments} parks`);
+                console.log(`✨ Ready for dog walking variety and exploration!`);
                 updateSegmentStats();
                 
             } catch (error) {
