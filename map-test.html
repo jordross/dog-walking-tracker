@@ -1990,6 +1990,67 @@ Longitude: Like -74.0060 (East/West)`;
             // Clear existing segment overlays
             clearSegmentOverlays();
             
+            // First pass: identify all intersections and nearby sidewalks
+            const intersections = new Set();
+            const sidewalksByLocation = new Map(); // location key -> sidewalk ways
+            const roadsByLocation = new Map(); // location key -> road ways
+            
+            // Find intersections (nodes shared by multiple ways)
+            const nodeUsage = new Map(); // nodeId -> count
+            for (const element of osmData.elements) {
+                if (element.type === 'way' && element.geometry) {
+                    for (const node of element.geometry) {
+                        const nodeId = `${node.lat.toFixed(6)},${node.lon.toFixed(6)}`;
+                        nodeUsage.set(nodeId, (nodeUsage.get(nodeId) || 0) + 1);
+                    }
+                }
+            }
+            
+            // Mark intersections (nodes used by 2+ ways)
+            for (const [nodeId, count] of nodeUsage) {
+                if (count >= 2) {
+                    intersections.add(nodeId);
+                }
+            }
+            
+            // Categorize ways and group by proximity
+            for (const element of osmData.elements) {
+                if (element.type === 'way' && element.geometry && element.geometry.length >= 2) {
+                    const tags = element.tags || {};
+                    
+                    // Skip restricted elements
+                    const isRestrictedElement = tags.fee === 'yes' || tags.access === 'private' || 
+                                              tags.access === 'no' || tags.access === 'customers' ||
+                                              tags.landuse === 'military' || tags.dog === 'no';
+                    if (isRestrictedElement) continue;
+                    
+                    const isRoad = tags.highway && tags.highway.match(/^(primary|secondary|tertiary|residential|unclassified)$/);
+                    const isSidewalk = tags.highway === 'footway' || tags.highway === 'sidewalk';
+                    
+                    if (isRoad || isSidewalk) {
+                        // Create a location key based on the way's center point
+                        const coords = element.geometry.map(node => [node.lat, node.lon]);
+                        const centerLat = coords.reduce((sum, coord) => sum + coord[0], 0) / coords.length;
+                        const centerLng = coords.reduce((sum, coord) => sum + coord[1], 0) / coords.length;
+                        
+                        // Group ways that are within 30m of each other (same street corridor)
+                        const locationKey = `${Math.round(centerLat * 1000)},${Math.round(centerLng * 1000)}`;
+                        
+                        if (isSidewalk) {
+                            if (!sidewalksByLocation.has(locationKey)) {
+                                sidewalksByLocation.set(locationKey, []);
+                            }
+                            sidewalksByLocation.get(locationKey).push(element);
+                        } else if (isRoad) {
+                            if (!roadsByLocation.has(locationKey)) {
+                                roadsByLocation.set(locationKey, []);
+                            }
+                            roadsByLocation.get(locationKey).push(element);
+                        }
+                    }
+                }
+            }
+            
             // Create segment overlays
             let segmentCount = 0;
             let filteredCount = 0;
@@ -2004,7 +2065,7 @@ Longitude: Like -74.0060 (East/West)`;
                        (tags.tourism === 'zoo') || (tags.tourism === 'museum') || (tags.tourism === 'theme_park');
             });
             
-            // Process each way individually to avoid incorrect grouping
+            // Process each way individually, but prioritize sidewalks over roads
             for (const element of osmData.elements) {
                 try {
                     if (element.type === 'way' && element.geometry && element.geometry.length >= 2) {
@@ -2033,31 +2094,53 @@ Longitude: Like -74.0060 (East/West)`;
                             continue;
                         }
                         
-                        // Only include walkable ways
+                        // Categorize walkable ways
                         const isRoad = tags.highway && tags.highway.match(/^(primary|secondary|tertiary|residential|unclassified)$/);
                         const isSidewalk = tags.highway === 'footway' || tags.highway === 'sidewalk';
                         const isPath = tags.highway === 'path' || tags.highway === 'pedestrian';
                         const isPark = tags.leisure === 'park';
+                        const isService = tags.highway === 'service'; // Add service roads
                         
-                        if (!isRoad && !isSidewalk && !isPath && !isPark) continue;
+                        if (!isRoad && !isSidewalk && !isPath && !isPark && !isService) continue;
                         
-                        // For roads and sidewalks, prioritize road characteristics
-                        let effectiveTags = tags;
-                        if (isRoad || isSidewalk) {
-                            effectiveTags = {
-                                ...tags,
-                                highway: isRoad ? tags.highway : 'residential', // Treat sidewalks as residential roads
-                                walkType: 'road_sidewalk'
-                            };
+                        // Skip roads if there are sidewalks nearby
+                        if (isRoad) {
+                            const centerLat = coordinates.reduce((sum, coord) => sum + coord[0], 0) / coordinates.length;
+                            const centerLng = coordinates.reduce((sum, coord) => sum + coord[1], 0) / coordinates.length;
+                            const locationKey = `${Math.round(centerLat * 1000)},${Math.round(centerLng * 1000)}`;
+                            
+                            // Check nearby location keys for sidewalks
+                            let hasSidewalkNearby = false;
+                            for (let latOffset = -1; latOffset <= 1; latOffset++) {
+                                for (let lngOffset = -1; lngOffset <= 1; lngOffset++) {
+                                    const nearbyKey = `${Math.round(centerLat * 1000) + latOffset},${Math.round(centerLng * 1000) + lngOffset}`;
+                                    if (sidewalksByLocation.has(nearbyKey)) {
+                                        hasSidewalkNearby = true;
+                                        break;
+                                    }
+                                }
+                                if (hasSidewalkNearby) break;
+                            }
+                            
+                            if (hasSidewalkNearby) {
+                                console.log(`🚫 Skipping road ${tags.name || 'unnamed'} - sidewalk available`);
+                                continue; // Skip this road, use the sidewalk instead
+                            }
                         }
                         
-                        // Split into maximum 40-meter segments
-                        const maxSegmentLength = 40; 
-                        const segmentChunks = subdivideSegmentByDistance(coordinates, maxSegmentLength);
+                        // Split segments at intersections for visual appeal
+                        const segmentChunks = splitAtIntersections(coordinates, intersections);
                         
-                        // Create polylines for each chunk
-                        for (let chunkIndex = 0; chunkIndex < segmentChunks.length; chunkIndex++) {
-                            const chunkCoords = segmentChunks[chunkIndex];
+                        // Further subdivide long segments (max 40m)
+                        const finalSegments = [];
+                        for (const chunk of segmentChunks) {
+                            const subChunks = subdivideSegmentByDistance(chunk, 40);
+                            finalSegments.push(...subChunks);
+                        }
+                        
+                        // Create polylines for each segment
+                        for (let chunkIndex = 0; chunkIndex < finalSegments.length; chunkIndex++) {
+                            const chunkCoords = finalSegments[chunkIndex];
                             const segmentId = `segment_${element.id}_${chunkIndex}`;
                             
                             if (chunkCoords.length < 2) continue;
@@ -2071,25 +2154,32 @@ Longitude: Like -74.0060 (East/West)`;
                                 );
                             }
                             
-                            // Skip very short segments (less than 5m)
-                            if (segmentLength < 5) continue;
+                            // Skip very short segments (less than 3m)
+                            if (segmentLength < 3) continue;
                             
-                            // Determine visual style - thicker for roads/sidewalks
+                            // Determine visual style
                             let color = '#94a3b8'; // Default gray (not walked)
-                            let weight = isRoad || isSidewalk ? 7 : 5; // Thicker for roads
+                            let weight = 5; // Default weight
+                            
+                            if (isSidewalk || isRoad) {
+                                weight = 7; // Thicker for main walkways
+                            } else if (isPath || isPark) {
+                                weight = 5; // Normal for paths/parks
+                            } else if (isService) {
+                                weight = 6; // Medium for service roads
+                            }
+                            
                             let opacity = 0.8;
                             
                             const walkData = walkedSegments.get(segmentId);
                             if (walkData && walkData.completed) {
-                                // This segment has been "walked" with sufficient persistence
-                                if (isRoad || isSidewalk) {
+                                // This segment has been completed
+                                if (isSidewalk || isRoad || isService) {
                                     color = '#3b82f6'; // Blue for roads/sidewalks
                                 } else if (isPath) {
                                     color = '#22c55e'; // Green for paths
                                 } else if (isPark) {
                                     color = '#10b981'; // Emerald for parks
-                                } else {
-                                    color = '#8b5cf6'; // Purple for other walkable areas
                                 }
                                 weight = weight + 2; // Even thicker when completed
                                 opacity = 1.0;
@@ -2107,11 +2197,12 @@ Longitude: Like -74.0060 (East/West)`;
                             
                             // Add click handler to mark as walked
                             polyline.on('click', () => {
-                                markSegmentAsWalked(segmentId, polyline, effectiveTags);
+                                markSegmentAsWalked(segmentId, polyline, tags);
                             });
                             
                             // Add tooltip
-                            const name = effectiveTags.name || effectiveTags.highway || 'Unnamed segment';
+                            const wayType = isSidewalk ? 'sidewalk' : isRoad ? 'road' : isPath ? 'path' : isPark ? 'park' : isService ? 'service' : 'walkway';
+                            const name = tags.name || wayType;
                             const lengthText = `${Math.round(segmentLength)}m`;
                             const walkInfo = walkData ? 
                                 (walkData.completed ? ' (COMPLETED)' : ` (${Math.round(walkData.progress)}% walked)`) : 
@@ -2132,10 +2223,37 @@ Longitude: Like -74.0060 (East/West)`;
                 }
             }
             
-            console.log(`✅ Rendered ${segmentCount} individual walkable segments within ${radius}m radius`);
+            console.log(`✅ Rendered ${segmentCount} walkable segments within ${radius}m radius`);
             console.log(`🚫 Filtered out ${filteredCount} segments outside radius`);
-            console.log(`📏 Max segment length: 40m, Min segment length: 5m`);
+            console.log(`🔄 Found ${intersections.size} intersections for segment splitting`);
+            console.log(`🚶 Prioritized sidewalks over roads where available`);
             updateSegmentStats();
+        }
+
+        // Split segments at intersections for better visual appeal
+        function splitAtIntersections(coordinates, intersections) {
+            const segments = [];
+            let currentSegment = [coordinates[0]];
+            
+            for (let i = 1; i < coordinates.length; i++) {
+                const coord = coordinates[i];
+                const nodeId = `${coord[0].toFixed(6)},${coord[1].toFixed(6)}`;
+                
+                currentSegment.push(coord);
+                
+                // If this is an intersection and we have a meaningful segment, split here
+                if (intersections.has(nodeId) && currentSegment.length > 1) {
+                    segments.push([...currentSegment]);
+                    currentSegment = [coord]; // Start new segment with intersection point
+                }
+            }
+            
+            // Add the final segment if it has multiple points
+            if (currentSegment.length > 1) {
+                segments.push(currentSegment);
+            }
+            
+            return segments.length > 0 ? segments : [coordinates];
         }
 
         // Subdivide segment by actual distance rather than coordinate count
