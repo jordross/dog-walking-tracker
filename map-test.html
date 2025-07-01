@@ -2877,6 +2877,7 @@ Longitude: Like -74.0060 (East/West)`;
         // Detect when user has "looped" around blocks and fill them with color
         
         let blockFillLayers = []; // Store completed block polygons
+        const MAX_ACTIVE_BLOCKS = 20; // Limit for performance
         
         // Check for completed blocks after each segment completion
         function checkBlockCompletion() {
@@ -2894,9 +2895,16 @@ Longitude: Like -74.0060 (East/West)`;
             // Fill in any newly completed blocks
             blocks.forEach(block => {
                 if (!completedBlocks.has(block.id)) {
+                    // Performance optimization: remove oldest blocks if we have too many
+                    if (blockFillLayers.length >= MAX_ACTIVE_BLOCKS) {
+                        console.log(`⚡ Performance: Removing oldest block (${blockFillLayers.length}/${MAX_ACTIVE_BLOCKS})`);
+                        const oldestBlock = blockFillLayers.shift();
+                        map.removeLayer(oldestBlock);
+                    }
+                    
                     fillCompletedBlock(block);
                     completedBlocks.add(block.id);
-                    console.log(`🎉 Block completed! ${block.id}`);
+                    console.log(`🎉 Block completed! ${block.id} (${blockFillLayers.length}/${MAX_ACTIVE_BLOCKS} active)`);
                 }
             });
         }
@@ -3341,8 +3349,8 @@ Longitude: Like -74.0060 (East/West)`;
             
             // Use actual polygon shape if available, otherwise fall back to rectangle
             if (block.isActualShape && block.polygon) {
-                // Convert polygon points to Leaflet coordinate format [lat, lng]
-                polygonCoords = block.polygon.map(point => [point.lat, point.lng]);
+                // Simplify polygon to reduce rendering complexity
+                polygonCoords = simplifyPolygon(block.polygon.map(point => [point.lat, point.lng]), 0.00001);
             } else if (block.bounds) {
                 // Fallback to rectangle for legacy blocks
                 const bounds = block.bounds;
@@ -3363,23 +3371,24 @@ Longitude: Like -74.0060 (East/West)`;
                 color: '#10b981', // Emerald border
                 fillColor: '#10b981', // Emerald fill
                 fillOpacity: 0.3, // Semi-transparent
-                weight: 3,
-                opacity: 0.8,
-                dashArray: '5, 5' // Dashed border to show it's a completion bonus
+                weight: 2, // Thinner border for performance
+                opacity: 0.7, // Slightly less opaque border
+                smoothFactor: 1.5, // Simplify rendering
+                interactive: false // Disable interactions for performance
             });
             
-            // Add tooltip showing block completion
+            // Add tooltip showing block completion (but only on hover to save memory)
             const areaText = block.area ? `~${Math.round(block.area)}m²` : 'Unknown area';
-            const shapeText = block.isActualShape ? 'Actual Shape' : 'Rectangular';
-            blockPolygon.bindTooltip(`🎉 Completed Block!<br/>Area: ${areaText}<br/>Shape: ${shapeText}`, {
-                sticky: true,
-                direction: 'center'
+            blockPolygon.bindTooltip(`🎉 Block Complete! ${areaText}`, {
+                sticky: false,
+                direction: 'center',
+                opacity: 0.9
             });
             
             blockPolygon.addTo(map);
             blockFillLayers.push(blockPolygon);
             
-            console.log(`✅ Filled completed block: ${block.id} (${shapeText})`);
+            console.log(`✅ Filled completed block: ${block.id} (${block.isActualShape ? 'Simplified' : 'Rectangular'})`);
             
             // Update statistics
             updateSegmentStats();
@@ -3458,6 +3467,48 @@ Longitude: Like -74.0060 (East/West)`;
             } else {
                 console.log('⚠️ Need at least 3 completed segments to form a block');
             }
+        }
+
+        // Simplify polygon using Douglas-Peucker algorithm to reduce rendering lag
+        function simplifyPolygon(points, tolerance) {
+            if (points.length <= 2) return points;
+            
+            // Find the point with the maximum distance from the line between first and last
+            let maxDistance = 0;
+            let maxIndex = 0;
+            
+            for (let i = 1; i < points.length - 1; i++) {
+                const distance = perpendicularDistance(points[i], points[0], points[points.length - 1]);
+                if (distance > maxDistance) {
+                    maxDistance = distance;
+                    maxIndex = i;
+                }
+            }
+            
+            // If max distance is greater than tolerance, recursively simplify
+            if (maxDistance > tolerance) {
+                const firstHalf = simplifyPolygon(points.slice(0, maxIndex + 1), tolerance);
+                const secondHalf = simplifyPolygon(points.slice(maxIndex), tolerance);
+                
+                // Combine results (remove duplicate point at junction)
+                return firstHalf.slice(0, -1).concat(secondHalf);
+            } else {
+                // If all points are within tolerance, just return start and end
+                return [points[0], points[points.length - 1]];
+            }
+        }
+        
+        // Calculate perpendicular distance from point to line
+        function perpendicularDistance(point, lineStart, lineEnd) {
+            const [px, py] = point;
+            const [x1, y1] = lineStart;
+            const [x2, y2] = lineEnd;
+            
+            const A = y2 - y1;
+            const B = x1 - x2;
+            const C = x2 * y1 - x1 * y2;
+            
+            return Math.abs(A * px + B * py + C) / Math.sqrt(A * A + B * B);
         }
 
     </script>
