@@ -280,6 +280,7 @@
             <button onclick="showLocationHelp()">❓ Need Coordinates?</button>
             <button onclick="loadMap()">🗺️ Load Map</button>
             <button onclick="generateGrid()">⬜ Generate Grid</button>
+            <button onclick="autoDetectWalkable()" id="autoDetectBtn">🤖 Auto-Detect Walkable Areas</button>
             <button onclick="clearGrid()">🧹 Clear Grid</button>
         </div>
 
@@ -608,6 +609,176 @@ Longitude: Like -74.0060 (East/West)`;
             setTimeout(() => {
                 button.textContent = originalText;
             }, 1500);
+        }
+
+        // Auto-detect walkable areas using OpenStreetMap data
+        async function autoDetectWalkable() {
+            if (!map) {
+                alert('Please load the map first!');
+                return;
+            }
+
+            if (gridCells.length === 0) {
+                alert('Please generate a grid first!');
+                return;
+            }
+
+            const button = document.getElementById('autoDetectBtn');
+            const originalText = button.textContent;
+            button.textContent = '🔍 Analyzing area...';
+            button.disabled = true;
+
+            try {
+                const center = map.getCenter();
+                const radius = parseInt(document.getElementById('radius').value);
+                
+                console.log(`Querying walkable areas around ${center.lat}, ${center.lng} within ${radius}m`);
+                
+                // Query OpenStreetMap for walkable areas
+                const walkableData = await queryWalkableAreas(center.lat, center.lng, radius);
+                
+                // Apply the data to existing grid
+                if (walkableData && walkableData.elements) {
+                    classifyGridWithOSMData(walkableData);
+                    button.textContent = '✅ Detection complete!';
+                } else {
+                    button.textContent = '❌ No data found';
+                }
+                
+            } catch (error) {
+                console.error('Auto-detection error:', error);
+                button.textContent = '❌ Detection failed';
+            }
+            
+            setTimeout(() => {
+                button.textContent = originalText;
+                button.disabled = false;
+            }, 3000);
+        }
+
+        // Query OpenStreetMap Overpass API for walkable areas
+        async function queryWalkableAreas(lat, lng, radius) {
+            const overpassUrl = 'https://overpass-api.de/api/interpreter';
+            
+            // Overpass query for walkable areas
+            const query = `
+                [out:json][timeout:25];
+                (
+                  // Roads and highways (walkable)
+                  way["highway"~"^(primary|secondary|tertiary|residential|unclassified|service|footway|path|pedestrian|cycleway)$"](around:${radius},${lat},${lng});
+                  
+                  // Sidewalks specifically  
+                  way["footway"="sidewalk"](around:${radius},${lat},${lng});
+                  
+                  // Parks and recreational areas
+                  way["leisure"~"^(park|playground|recreation_ground|garden)$"](around:${radius},${lat},${lng});
+                  rel["leisure"~"^(park|playground|recreation_ground|garden)$"](around:${radius},${lat},${lng});
+                  
+                  // Public paths and trails
+                  way["highway"="track"]["access"!="private"](around:${radius},${lat},${lng});
+                );
+                out geom;
+            `;
+
+            try {
+                const response = await fetch(overpassUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: 'data=' + encodeURIComponent(query)
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                console.log('OSM Data received:', data.elements?.length || 0, 'elements');
+                return data;
+                
+            } catch (error) {
+                console.error('Error querying OpenStreetMap:', error);
+                return null;
+            }
+        }
+
+        // Classify grid cells based on OSM data
+        function classifyGridWithOSMData(osmData) {
+            if (!osmData || !osmData.elements) {
+                console.error('No OSM data to process');
+                return;
+            }
+
+            const bounds = map.getBounds();
+            const northeast = bounds.getNorthEast();
+            const southwest = bounds.getSouthWest();
+            
+            let classifiedCount = 0;
+            
+            gridCells.forEach(cell => {
+                const row = parseInt(cell.dataset.row);
+                const col = parseInt(cell.dataset.col);
+                const gridSize = parseInt(document.getElementById('grid-size').value);
+                
+                // Calculate the center lat/lng of this grid cell
+                const latRange = northeast.lat - southwest.lat;
+                const lngRange = northeast.lng - southwest.lng;
+                
+                const cellLat = southwest.lat + (latRange * (1 - (row + 0.5) / gridSize));
+                const cellLng = southwest.lng + (lngRange * (col + 0.5) / gridSize);
+                
+                // Check if this grid cell intersects with any walkable areas
+                const isWalkable = checkPointInWalkableAreas(cellLat, cellLng, osmData.elements);
+                
+                if (isWalkable) {
+                    cell.dataset.state = 'walkable';
+                    cell.className = 'grid-cell walkable';
+                    cell.title = `Cell ${row},${col} - walkable (auto-detected)`;
+                    classifiedCount++;
+                } else {
+                    cell.dataset.state = 'non-walkable';
+                    cell.className = 'grid-cell non-walkable';
+                    cell.title = `Cell ${row},${col} - non-walkable (auto-detected)`;
+                }
+            });
+            
+            console.log(`Auto-classified ${classifiedCount} cells as walkable out of ${gridCells.length} total`);
+            updateStats();
+        }
+
+        // Check if a point is within any walkable areas
+        function checkPointInWalkableAreas(pointLat, pointLng, osmElements) {
+            for (const element of osmElements) {
+                if (element.type === 'way' && element.geometry) {
+                    // Check proximity to walkable infrastructure
+                    for (const node of element.geometry) {
+                        const distance = calculateDistance(pointLat, pointLng, node.lat, node.lon);
+                        // If within 30 meters of a walkable way, consider it walkable
+                        // (accounts for sidewalks, nearby roads, etc.)
+                        if (distance < 30) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        // Calculate distance between two points in meters using Haversine formula
+        function calculateDistance(lat1, lng1, lat2, lng2) {
+            const R = 6371e3; // Earth's radius in meters
+            const φ1 = lat1 * Math.PI/180;
+            const φ2 = lat2 * Math.PI/180;
+            const Δφ = (lat2-lat1) * Math.PI/180;
+            const Δλ = (lng2-lng1) * Math.PI/180;
+
+            const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+                      Math.cos(φ1) * Math.cos(φ2) *
+                      Math.sin(Δλ/2) * Math.sin(Δλ/2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+
+            return R * c; // Distance in meters
         }
 
         // Keyboard shortcuts for easier testing
