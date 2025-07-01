@@ -2004,71 +2004,72 @@ Longitude: Like -74.0060 (East/West)`;
                         const isNearRestrictedArea = checkIfPathNearRestrictedAreas(element, restrictedAreas);
                         if (isNearRestrictedArea) continue;
                         
-                                            // Create coordinates and subdivide if necessary
-                    const coordinates = element.geometry.map(node => [node.lat, node.lon]);
-                    const segmentId = `segment_${element.id}`;
-                    
-                    // Validate coordinates
-                    if (coordinates.length < 2) {
-                        console.log(`Skipping segment ${segmentId} - insufficient coordinates`);
-                        continue;
-                    }
-                    
-                    // Break long segments into smaller chunks (max ~50m per chunk)
-                    const subSegmentCoords = subdivideSegment(coordinates, 50);
-                    
-                    // Create multiple polylines for subdivided segments
-                    for (let subIndex = 0; subIndex < subSegmentCoords.length; subIndex++) {
-                        const subCoords = subSegmentCoords[subIndex];
-                        const subSegmentId = `${segmentId}_sub_${subIndex}`;
+                        // Create coordinates and subdivide if necessary
+                        const coordinates = element.geometry.map(node => [node.lat, node.lon]);
+                        const segmentId = `segment_${element.id}`;
                         
-                        if (subCoords.length < 2) continue;
-                        
-                        // Determine segment type and color
-                        let color = '#94a3b8'; // Default gray (not walked)
-                        let weight = 4;
-                        let opacity = 0.8;
-                        
-                        if (walkedSegments.has(segmentId)) {
-                            // This segment has been "walked"
-                            if (tags.highway === 'footway' || tags.highway === 'path' || tags.highway === 'pedestrian') {
-                                color = '#22c55e'; // Green for paths/footways
-                            } else if (tags.highway && tags.highway.match(/^(primary|secondary|tertiary|residential)$/)) {
-                                color = '#3b82f6'; // Blue for roads
-                            } else if (tags.leisure === 'park') {
-                                color = '#10b981'; // Emerald for parks
-                            } else {
-                                color = '#8b5cf6'; // Purple for other walkable areas
-                            }
-                            weight = 6;
-                            opacity = 1.0;
+                        // Validate coordinates
+                        if (coordinates.length < 2) {
+                            console.log(`Skipping segment ${segmentId} - insufficient coordinates`);
+                            continue;
                         }
                         
-                        const polyline = L.polyline(subCoords, {
-                            color: color,
-                            weight: weight,
-                            opacity: opacity,
-                            lineJoin: 'round',
-                            lineCap: 'round',
-                            segmentId: subSegmentId  // Store ID for test walk
-                        });
+                        // Break long segments into smaller chunks (max ~50m per chunk)
+                        const subSegmentCoords = subdivideSegment(coordinates, 50);
                         
-                        // Add click handler to mark as walked
-                        polyline.on('click', () => {
-                            markSegmentAsWalked(subSegmentId, polyline, tags);
-                        });
-                        
-                        // Add tooltip
-                        const name = tags.name || tags.highway || 'Unnamed segment';
-                        const walked = walkedSegments.has(segmentId) ? ' (WALKED)' : ' (click to mark as walked)';
-                        polyline.bindTooltip(`${name}${walked}`, {
-                            sticky: true,
-                            direction: 'top'
-                        });
-                        
-                        polyline.addTo(map);
-                        segmentLayers.push(polyline);
-                        segmentCount++;
+                        // Create multiple polylines for subdivided segments
+                        for (let subIndex = 0; subIndex < subSegmentCoords.length; subIndex++) {
+                            const subCoords = subSegmentCoords[subIndex];
+                            const subSegmentId = `${segmentId}_sub_${subIndex}`;
+                            
+                            if (subCoords.length < 2) continue;
+                            
+                            // Determine segment type and color
+                            let color = '#94a3b8'; // Default gray (not walked)
+                            let weight = 4;
+                            let opacity = 0.8;
+                            
+                            if (walkedSegments.has(segmentId)) {
+                                // This segment has been "walked"
+                                if (tags.highway === 'footway' || tags.highway === 'path' || tags.highway === 'pedestrian') {
+                                    color = '#22c55e'; // Green for paths/footways
+                                } else if (tags.highway && tags.highway.match(/^(primary|secondary|tertiary|residential)$/)) {
+                                    color = '#3b82f6'; // Blue for roads
+                                } else if (tags.leisure === 'park') {
+                                    color = '#10b981'; // Emerald for parks
+                                } else {
+                                    color = '#8b5cf6'; // Purple for other walkable areas
+                                }
+                                weight = 6;
+                                opacity = 1.0;
+                            }
+                            
+                            const polyline = L.polyline(subCoords, {
+                                color: color,
+                                weight: weight,
+                                opacity: opacity,
+                                lineJoin: 'round',
+                                lineCap: 'round',
+                                segmentId: subSegmentId  // Store ID for test walk
+                            });
+                            
+                            // Add click handler to mark as walked
+                            polyline.on('click', () => {
+                                markSegmentAsWalked(subSegmentId, polyline, tags);
+                            });
+                            
+                            // Add tooltip
+                            const name = tags.name || tags.highway || 'Unnamed segment';
+                            const walked = walkedSegments.has(segmentId) ? ' (WALKED)' : ' (click to mark as walked)';
+                            polyline.bindTooltip(`${name}${walked}`, {
+                                sticky: true,
+                                direction: 'top'
+                            });
+                            
+                            polyline.addTo(map);
+                            segmentLayers.push(polyline);
+                            segmentCount++;
+                        }
                     }
                 } catch (segmentError) {
                     console.log(`Error processing segment ${element.id}:`, segmentError);
