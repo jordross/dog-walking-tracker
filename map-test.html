@@ -1956,26 +1956,16 @@ Longitude: Like -74.0060 (East/West)`;
             }
         }
 
-        // Calculate appropriate radius based on map bounds
-        function calculateRadius(bounds) {
-            const center = map.getCenter();
-            const ne = bounds.getNorthEast();
-            
-            // Calculate distance from center to northeast corner
-            const distance = calculateDistance(center.lat, center.lng, ne.lat, ne.lng);
-            
-            // Use a reasonable radius - much smaller than the full bounds
-            // For neighborhood walking, 400-800m is more realistic
-            const radius = Math.min(Math.max(distance * 0.3, 200), 800); // Between 200m and 800m
-            
-            return Math.round(radius);
+        // Get the actual radius from the input field (in meters)
+        function getRadiusFromInput() {
+            const radiusInput = document.getElementById('radius');
+            return parseInt(radiusInput.value) || 500; // Default to 500m if invalid
         }
 
         // Render all walkable segments as interactive polylines
         async function renderWalkableSegments() {
             const center = map.getCenter();
-            const bounds = map.getBounds();
-            const radius = calculateRadius(bounds);
+            const radius = getRadiusFromInput(); // Use actual input radius instead of map bounds
             
             console.log(`Loading walkable segments within ${radius}m of ${center.lat.toFixed(6)}, ${center.lng.toFixed(6)}`);
             
@@ -2052,7 +2042,12 @@ Longitude: Like -74.0060 (East/West)`;
                        tags.shop || tags.amenity === 'restaurant' || tags.amenity === 'fast_food' ||
                        tags.amenity === 'cafe' || tags.amenity === 'bank' || tags.amenity === 'pharmacy' ||
                        tags.building === 'commercial' || tags.landuse === 'commercial' ||
-                       tags.landuse === 'retail' || tags.landuse === 'industrial';
+                       tags.landuse === 'retail' || tags.landuse === 'industrial' ||
+                       // Gas station specific filtering
+                       (tags.highway === 'service' && tags.service === 'driveway') ||
+                       (tags.highway === 'service' && tags.service === 'parking_aisle') ||
+                       (tags.highway === 'service' && tags.amenity) ||
+                       (tags.highway === 'service' && tags.shop);
             });
             
             // Helper function to check if a road has a nearby sidewalk
@@ -2093,7 +2088,12 @@ Longitude: Like -74.0060 (East/West)`;
                                                   tags.shop || tags.amenity === 'restaurant' || tags.amenity === 'fast_food' ||
                                                   tags.amenity === 'cafe' || tags.amenity === 'bank' || tags.amenity === 'pharmacy' ||
                                                   tags.building === 'commercial' || tags.landuse === 'commercial' ||
-                                                  tags.landuse === 'retail' || tags.landuse === 'industrial';
+                                                  tags.landuse === 'retail' || tags.landuse === 'industrial' ||
+                                                  // Gas station specific filtering
+                                                  (tags.highway === 'service' && tags.service === 'driveway') ||
+                                                  (tags.highway === 'service' && tags.service === 'parking_aisle') ||
+                                                  (tags.highway === 'service' && tags.amenity) || // Service road with any amenity
+                                                  (tags.highway === 'service' && tags.shop); // Service road with any shop
                         
                         if (isRestrictedElement) continue;
                         
@@ -2118,7 +2118,15 @@ Longitude: Like -74.0060 (East/West)`;
                         const isSidewalk = tags.highway === 'footway' || tags.highway === 'sidewalk';
                         const isPath = tags.highway === 'path' || tags.highway === 'pedestrian';
                         const isPark = tags.leisure === 'park';
-                        const isService = tags.highway === 'service' && !tags.access; // Only public service roads
+                        
+                        // Only include service roads that are genuine public laneways, not commercial driveways
+                        const isService = tags.highway === 'service' && 
+                                        !tags.access && // Must be public access
+                                        tags.service !== 'driveway' && // Not a driveway
+                                        tags.service !== 'parking_aisle' && // Not parking lot
+                                        !tags.amenity && // Not associated with amenities like gas stations
+                                        !tags.shop && // Not associated with shops
+                                        (!tags.service || tags.service === 'alley'); // Only alleys or unspecified service roads
                         
                         if (!isRoad && !isSidewalk && !isPath && !isPark && !isService) continue;
                         
@@ -2569,7 +2577,7 @@ Longitude: Like -74.0060 (East/West)`;
         function createTestWalkRoute() {
             const center = map.getCenter();
             const bounds = map.getBounds();
-            const radius = calculateRadius(bounds) * 0.8; // Use 80% of radius to stay well within bounds
+            const radius = getRadiusFromInput() * 0.8; // Use 80% of radius to stay well within bounds
             
             console.log(`Creating test walk route within ${radius}m of center`);
             
