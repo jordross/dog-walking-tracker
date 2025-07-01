@@ -100,26 +100,31 @@
 
         .grid-cell {
             position: absolute;
-            border: 1px solid rgba(79, 70, 229, 0.3);
-            background: rgba(79, 70, 229, 0.1);
+            border: 2px solid rgba(79, 70, 229, 0.4);
+            background: rgba(79, 70, 229, 0.15);
             transition: all 0.2s;
             cursor: pointer;
             pointer-events: auto;
         }
 
         .grid-cell.walkable {
-            background: rgba(34, 197, 94, 0.3);
-            border-color: rgba(34, 197, 94, 0.6);
+            background: rgba(34, 197, 94, 0.6);
+            border: 2px solid rgba(22, 163, 74, 0.9);
         }
 
         .grid-cell.non-walkable {
-            background: rgba(239, 68, 68, 0.3);
-            border-color: rgba(239, 68, 68, 0.6);
+            background: rgba(239, 68, 68, 0.6);
+            border: 2px solid rgba(220, 38, 38, 0.9);
+        }
+
+        .grid-cell.restricted {
+            background: rgba(168, 85, 247, 0.6);
+            border: 2px solid rgba(147, 51, 234, 0.9);
         }
 
         .grid-cell.unknown {
-            background: rgba(156, 163, 175, 0.2);
-            border-color: rgba(156, 163, 175, 0.4);
+            background: rgba(156, 163, 175, 0.4);
+            border: 2px solid rgba(107, 114, 128, 0.7);
         }
 
         .grid-cell:hover {
@@ -315,6 +320,25 @@
             <h3>📊 Grid Analysis</h3>
             <p>Click on grid cells to classify areas. This simulates how the app would analyze walkable vs non-walkable areas in your residential neighborhood.</p>
             
+            <div class="legend">
+                <div class="legend-item">
+                    <div class="legend-color" style="background: rgba(34, 197, 94, 0.6); border: 2px solid rgba(22, 163, 74, 0.9);"></div>
+                    <span>Walkable Areas</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: rgba(239, 68, 68, 0.6); border: 2px solid rgba(220, 38, 38, 0.9);"></div>
+                    <span>Non-walkable Areas</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: rgba(168, 85, 247, 0.6); border: 2px solid rgba(147, 51, 234, 0.9);"></div>
+                    <span>Restricted Areas</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: rgba(156, 163, 175, 0.4); border: 2px solid rgba(107, 114, 128, 0.7);"></div>
+                    <span>Unknown Areas</span>
+                </div>
+            </div>
+
             <div class="stats">
                 <div class="stat">
                     <div class="stat-value" id="walkable-count">0</div>
@@ -323,6 +347,10 @@
                 <div class="stat">
                     <div class="stat-value" id="non-walkable-count">0</div>
                     <div class="stat-label">Non-walkable Cells</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value" id="restricted-count">0</div>
+                    <div class="stat-label">Restricted Cells</div>
                 </div>
                 <div class="stat">
                     <div class="stat-value" id="unknown-count">0</div>
@@ -578,14 +606,16 @@ Longitude: Like -74.0060 (East/West)`;
         function updateStats() {
             const walkable = gridCells.filter(cell => cell.dataset.state === 'walkable').length;
             const nonWalkable = gridCells.filter(cell => cell.dataset.state === 'non-walkable').length;
+            const restricted = gridCells.filter(cell => cell.dataset.state === 'restricted').length;
             const unknown = gridCells.filter(cell => cell.dataset.state === 'unknown').length;
             const total = gridCells.length;
             
-            const classified = walkable + nonWalkable;
+            const classified = walkable + nonWalkable + restricted;
             const coveragePercent = total > 0 ? Math.round((classified / total) * 100) : 0;
             
             document.getElementById('walkable-count').textContent = walkable;
             document.getElementById('non-walkable-count').textContent = nonWalkable;
+            document.getElementById('restricted-count').textContent = restricted;
             document.getElementById('unknown-count').textContent = unknown;
             document.getElementById('coverage-percent').textContent = `${coveragePercent}%`;
         }
@@ -635,12 +665,23 @@ Longitude: Like -74.0060 (East/West)`;
                 
                 console.log(`Querying walkable areas around ${center.lat}, ${center.lng} within ${radius}m`);
                 
-                // Query OpenStreetMap for walkable areas
-                const walkableData = await queryWalkableAreas(center.lat, center.lng, radius);
+                // Query both walkable AND restricted areas
+                const [walkableData, restrictedData] = await Promise.all([
+                    queryWalkableAreas(center.lat, center.lng, radius),
+                    queryRestrictedAreas(center.lat, center.lng, radius)
+                ]);
+                
+                // Combine the data
+                const combinedData = {
+                    elements: [
+                        ...(walkableData?.elements || []),
+                        ...(restrictedData?.elements || [])
+                    ]
+                };
                 
                 // Apply the data to existing grid
-                if (walkableData && walkableData.elements) {
-                    classifyGridWithOSMData(walkableData);
+                if (combinedData.elements.length > 0) {
+                    classifyGridWithOSMData(combinedData);
                     button.textContent = '✅ Detection complete!';
                 } else {
                     button.textContent = '❌ No data found';
@@ -732,7 +773,15 @@ Longitude: Like -74.0060 (East/West)`;
                 // Check if this grid cell intersects with any walkable areas
                 const isWalkable = checkPointInWalkableAreas(cellLat, cellLng, osmData.elements);
                 
-                if (isWalkable) {
+                // Check for restricted areas first
+                const isRestricted = checkPointInRestrictedAreas(cellLat, cellLng, osmData.elements);
+                
+                if (isRestricted) {
+                    cell.dataset.state = 'restricted';
+                    cell.className = 'grid-cell restricted';
+                    cell.title = `Cell ${row},${col} - restricted (auto-detected)`;
+                    classifiedCount++;
+                } else if (isWalkable) {
                     cell.dataset.state = 'walkable';
                     cell.className = 'grid-cell walkable';
                     cell.title = `Cell ${row},${col} - walkable (auto-detected)`;
@@ -752,13 +801,46 @@ Longitude: Like -74.0060 (East/West)`;
         function checkPointInWalkableAreas(pointLat, pointLng, osmElements) {
             for (const element of osmElements) {
                 if (element.type === 'way' && element.geometry) {
-                    // Check proximity to walkable infrastructure
-                    for (const node of element.geometry) {
-                        const distance = calculateDistance(pointLat, pointLng, node.lat, node.lon);
-                        // If within 30 meters of a walkable way, consider it walkable
-                        // (accounts for sidewalks, nearby roads, etc.)
-                        if (distance < 30) {
-                            return true;
+                    // Only check walkable elements (not restricted ones)
+                    const tags = element.tags || {};
+                    const isRestrictedElement = tags.fee === 'yes' || tags.access === 'private' || 
+                                              tags.access === 'no' || tags.access === 'customers' ||
+                                              tags.landuse === 'military' || tags.dog === 'no';
+                    
+                    if (!isRestrictedElement) {
+                        // Check proximity to walkable infrastructure
+                        for (const node of element.geometry) {
+                            const distance = calculateDistance(pointLat, pointLng, node.lat, node.lon);
+                            // If within 30 meters of a walkable way, consider it walkable
+                            // (accounts for sidewalks, nearby roads, etc.)
+                            if (distance < 30) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        // Check if a point is within any restricted areas
+        function checkPointInRestrictedAreas(pointLat, pointLng, osmElements) {
+            for (const element of osmElements) {
+                if (element.type === 'way' && element.geometry) {
+                    // Only check restricted elements
+                    const tags = element.tags || {};
+                    const isRestrictedElement = tags.fee === 'yes' || tags.access === 'private' || 
+                                              tags.access === 'no' || tags.access === 'customers' ||
+                                              tags.landuse === 'military' || tags.dog === 'no';
+                    
+                    if (isRestrictedElement) {
+                        // Check proximity to restricted areas
+                        for (const node of element.geometry) {
+                            const distance = calculateDistance(pointLat, pointLng, node.lat, node.lon);
+                            // If within 15 meters of a restricted area, consider it restricted
+                            if (distance < 15) {
+                                return true;
+                            }
                         }
                     }
                 }
