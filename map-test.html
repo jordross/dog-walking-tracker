@@ -293,6 +293,7 @@
             <button onclick="toggleRawDataOverlay()" id="rawDataBtn">📊 Show Raw OSM Data</button>
             <button onclick="toggleEnhancedDetection()" id="enhancedBtn">🎯 Enhanced Detection</button>
             <button onclick="debugSpecificCell()" id="debugCellBtn">🔬 Debug Cell Intersection</button>
+            <button onclick="toggleSegmentMode()" id="segmentBtn">🛣️ Segment Mode (Prototype)</button>
             <button onclick="clearGrid()">🧹 Clear Grid</button>
         </div>
 
@@ -849,6 +850,25 @@ Longitude: Like -74.0060 (East/West)`;
 
         // Check if a point is within any walkable areas
         function checkPointInWalkableAreas(pointLat, pointLng, osmElements) {
+            // First, find all restricted areas for proximity checking
+            const restrictedAreas = osmElements.filter(element => {
+                const tags = element.tags || {};
+                return tags.fee === 'yes' || 
+                       tags.access === 'private' || 
+                       tags.access === 'no' || 
+                       tags.access === 'customers' ||
+                       tags.landuse === 'military' || 
+                       tags.dog === 'no' ||
+                       tags.admission ||
+                       (tags.leisure === 'garden' && tags.tourism) ||
+                       (tags.tourism === 'attraction' && tags.leisure === 'garden') ||
+                       (tags.name && tags.name.toLowerCase().includes('botanical')) ||
+                       (tags.name && tags.name.toLowerCase().includes('vandusen')) ||
+                       (tags.tourism === 'zoo') ||
+                       (tags.tourism === 'museum') ||
+                       (tags.tourism === 'theme_park');
+            });
+            
             for (const element of osmElements) {
                 if (element.type === 'way' && element.geometry) {
                     // Only check walkable elements (not restricted ones)
@@ -858,27 +878,34 @@ Longitude: Like -74.0060 (East/West)`;
                                               tags.landuse === 'military' || tags.dog === 'no';
                     
                     if (!isRestrictedElement) {
-                        // Check proximity to walkable infrastructure
-                        for (const node of element.geometry) {
-                            const distance = calculateDistance(pointLat, pointLng, node.lat, node.lon);
-                            
-                            // Different detection radii based on infrastructure type
-                            let detectionRadius = 30; // Default 30m
-                            
-                            if (tags.highway === 'footway' || tags.highway === 'pedestrian') {
-                                detectionRadius = 20; // Footways and pedestrian areas
-                            } else if (tags.highway === 'residential' || tags.highway === 'service') {
-                                detectionRadius = 50; // Residential streets (likely have sidewalks)
-                            } else if (tags.highway && tags.highway.match(/^(primary|secondary|tertiary)$/)) {
-                                detectionRadius = 60; // Major roads (wider with sidewalks)
-                            } else if (tags.leisure === 'park') {
-                                detectionRadius = 40; // Parks
+                        // Check if this path is inside or very close to a restricted area
+                        const isNearRestrictedArea = checkIfPathNearRestrictedAreas(element, restrictedAreas);
+                        
+                        if (!isNearRestrictedArea) {
+                            // Check proximity to walkable infrastructure
+                            for (const node of element.geometry) {
+                                const distance = calculateDistance(pointLat, pointLng, node.lat, node.lon);
+                                
+                                // Different detection radii based on infrastructure type
+                                let detectionRadius = 30; // Default 30m
+                                
+                                if (tags.highway === 'footway' || tags.highway === 'pedestrian') {
+                                    detectionRadius = 20; // Footways and pedestrian areas
+                                } else if (tags.highway === 'residential' || tags.highway === 'service') {
+                                    detectionRadius = 50; // Residential streets (likely have sidewalks)
+                                } else if (tags.highway && tags.highway.match(/^(primary|secondary|tertiary)$/)) {
+                                    detectionRadius = 60; // Major roads (wider with sidewalks)
+                                } else if (tags.leisure === 'park') {
+                                    detectionRadius = 40; // Parks
+                                }
+                                
+                                if (distance < detectionRadius) {
+                                    console.log(`Found walkable: ${tags.name || tags.highway || 'unnamed'} at ${distance.toFixed(1)}m (radius: ${detectionRadius}m)`);
+                                    return true;
+                                }
                             }
-                            
-                            if (distance < detectionRadius) {
-                                console.log(`Found walkable: ${tags.name || tags.highway || 'unnamed'} at ${distance.toFixed(1)}m (radius: ${detectionRadius}m)`);
-                                return true;
-                            }
+                        } else {
+                            console.log(`Skipping path near restricted area: ${tags.name || tags.highway || 'unnamed'}`);
                         }
                     }
                 }
@@ -1264,6 +1291,11 @@ Longitude: Like -74.0060 (East/West)`;
         let rawDataLayers = [];
         let rawDataVisible = false;
         let enhancedDetectionEnabled = false;
+        
+        // Segment mode variables
+        let segmentMode = false;
+        let segmentLayers = [];
+        let walkedSegments = new Set(); // Store IDs of segments that have been "walked"
 
         // Toggle raw OSM data overlay on the map
         async function toggleRawDataOverlay() {
@@ -1575,6 +1607,25 @@ Longitude: Like -74.0060 (East/West)`;
 
         // Enhanced check for walkable areas using geometric intersection
         function checkGridCellIntersectsWalkableAreas(cellBounds, osmElements) {
+            // First, find all restricted areas for proximity checking
+            const restrictedAreas = osmElements.filter(element => {
+                const tags = element.tags || {};
+                return tags.fee === 'yes' || 
+                       tags.access === 'private' || 
+                       tags.access === 'no' || 
+                       tags.access === 'customers' ||
+                       tags.landuse === 'military' || 
+                       tags.dog === 'no' ||
+                       tags.admission ||
+                       (tags.leisure === 'garden' && tags.tourism) ||
+                       (tags.tourism === 'attraction' && tags.leisure === 'garden') ||
+                       (tags.name && tags.name.toLowerCase().includes('botanical')) ||
+                       (tags.name && tags.name.toLowerCase().includes('vandusen')) ||
+                       (tags.tourism === 'zoo') ||
+                       (tags.tourism === 'museum') ||
+                       (tags.tourism === 'theme_park');
+            });
+            
             for (const element of osmElements) {
                 if (element.type === 'way' && element.geometry && element.geometry.length >= 2) {
                     const tags = element.tags || {};
@@ -1583,41 +1634,80 @@ Longitude: Like -74.0060 (East/West)`;
                                               tags.landuse === 'military' || tags.dog === 'no';
                     
                     if (!isRestrictedElement) {
-                        // Check if any segment of this OSM way intersects with the grid cell
-                        for (let i = 0; i < element.geometry.length - 1; i++) {
-                            const node1 = element.geometry[i];
-                            const node2 = element.geometry[i + 1];
-                            
-                            if (lineIntersectsRect(
-                                node1.lon, node1.lat, 
-                                node2.lon, node2.lat,
-                                cellBounds.west, cellBounds.south, 
-                                cellBounds.east, cellBounds.north
-                            )) {
-                                console.log(`Geometric intersection found: ${tags.name || tags.highway || 'unnamed'} crosses grid cell`);
-                                return {
-                                    intersects: true,
-                                    feature: tags.name || tags.highway || 'unnamed feature',
-                                    type: tags.highway || tags.leisure || 'unknown'
-                                };
-                            }
-                        }
+                        // Check if this path is inside or very close to a restricted area
+                        const isNearRestrictedArea = checkIfPathNearRestrictedAreas(element, restrictedAreas);
                         
-                        // Also check if any nodes are within the cell bounds
-                        for (const node of element.geometry) {
-                            if (pointInRect(node.lon, node.lat, cellBounds.west, cellBounds.south, cellBounds.east, cellBounds.north)) {
-                                console.log(`Point intersection found: ${tags.name || tags.highway || 'unnamed'} has nodes in grid cell`);
-                                return {
-                                    intersects: true,
-                                    feature: tags.name || tags.highway || 'unnamed feature',
-                                    type: tags.highway || tags.leisure || 'unknown'
-                                };
+                        if (!isNearRestrictedArea) {
+                            // Check if any segment of this OSM way intersects with the grid cell
+                            for (let i = 0; i < element.geometry.length - 1; i++) {
+                                const node1 = element.geometry[i];
+                                const node2 = element.geometry[i + 1];
+                                
+                                if (lineIntersectsRect(
+                                    node1.lon, node1.lat, 
+                                    node2.lon, node2.lat,
+                                    cellBounds.west, cellBounds.south, 
+                                    cellBounds.east, cellBounds.north
+                                )) {
+                                    console.log(`Geometric intersection found: ${tags.name || tags.highway || 'unnamed'} crosses grid cell`);
+                                    return {
+                                        intersects: true,
+                                        feature: tags.name || tags.highway || 'unnamed feature',
+                                        type: tags.highway || tags.leisure || 'unknown'
+                                    };
+                                }
                             }
+                            
+                            // Also check if any nodes are within the cell bounds
+                            for (const node of element.geometry) {
+                                if (pointInRect(node.lon, node.lat, cellBounds.west, cellBounds.south, cellBounds.east, cellBounds.north)) {
+                                    console.log(`Point intersection found: ${tags.name || tags.highway || 'unnamed'} has nodes in grid cell`);
+                                    return {
+                                        intersects: true,
+                                        feature: tags.name || tags.highway || 'unnamed feature',
+                                        type: tags.highway || tags.leisure || 'unknown'
+                                    };
+                                }
+                            }
+                        } else {
+                            console.log(`Skipping path near restricted area: ${tags.name || tags.highway || 'unnamed'}`);
                         }
                     }
                 }
             }
             return { intersects: false };
+        }
+
+        // Check if a path is near any restricted areas (to exclude VanDusen internal paths)
+        function checkIfPathNearRestrictedAreas(pathElement, restrictedAreas) {
+            if (!pathElement.geometry || restrictedAreas.length === 0) return false;
+            
+            const pathTags = pathElement.tags || {};
+            
+            // Special handling for paths that might be inside fee-based attractions
+            for (const restrictedArea of restrictedAreas) {
+                if (!restrictedArea.geometry) continue;
+                
+                const restrictedTags = restrictedArea.tags || {};
+                
+                // Check if any point of the path is close to the restricted area
+                for (const pathNode of pathElement.geometry) {
+                    for (const restrictedNode of restrictedArea.geometry) {
+                        const distance = calculateDistance(
+                            pathNode.lat, pathNode.lon,
+                            restrictedNode.lat, restrictedNode.lon
+                        );
+                        
+                        // If path is within 50m of a restricted area, consider it part of that area
+                        if (distance < 50) {
+                            console.log(`Path ${pathTags.name || pathTags.highway || 'unnamed'} is ${distance.toFixed(1)}m from restricted area ${restrictedTags.name || 'unnamed'}`);
+                            return true;
+                        }
+                    }
+                }
+            }
+            
+            return false;
         }
 
         // Enhanced check for restricted areas using geometric intersection
@@ -1817,6 +1907,212 @@ Longitude: Like -74.0060 (East/West)`;
                     button.style.background = '#4f46e5';
                 }
             }, 30000);
+        }
+
+        // Toggle segment visualization mode (Strava-style)
+        async function toggleSegmentMode() {
+            if (!map) {
+                alert('Please load the map first!');
+                return;
+            }
+
+            const button = document.getElementById('segmentBtn');
+            
+            if (segmentMode) {
+                // Turn off segment mode
+                clearSegmentOverlays();
+                segmentMode = false;
+                button.textContent = '🛣️ Segment Mode (Prototype)';
+                button.style.background = '';
+                console.log('❌ Segment mode disabled');
+            } else {
+                // Turn on segment mode
+                segmentMode = true;
+                button.textContent = '🛣️ Segment Mode: ON';
+                button.style.background = '#3b82f6';
+                button.disabled = true;
+                
+                console.log('✅ Segment mode enabled - Loading walkable segments...');
+                
+                try {
+                    await renderWalkableSegments();
+                    button.disabled = false;
+                    console.log('✅ Segment visualization ready! Click segments to mark as walked.');
+                } catch (error) {
+                    console.error('❌ Error loading segments:', error);
+                    button.disabled = false;
+                    button.textContent = '🛣️ Segment Mode (ERROR)';
+                    button.style.background = '#ef4444';
+                }
+            }
+        }
+
+        // Render all walkable segments as interactive polylines
+        async function renderWalkableSegments() {
+            const center = map.getCenter();
+            const bounds = map.getBounds();
+            const radius = calculateRadius(bounds);
+            
+            console.log(`Loading walkable segments within ${radius}m of ${center.lat.toFixed(6)}, ${center.lng.toFixed(6)}`);
+            
+            // Get OSM data for walkable areas
+            const osmData = await queryWalkableAreas(center.lat, center.lng, radius);
+            if (!osmData || !osmData.elements) {
+                throw new Error('Failed to load OSM data');
+            }
+            
+            // Clear existing segment overlays
+            clearSegmentOverlays();
+            
+            // Create segment overlays
+            let segmentCount = 0;
+            const restrictedAreas = osmData.elements.filter(element => {
+                const tags = element.tags || {};
+                return tags.fee === 'yes' || tags.access === 'private' || tags.access === 'no' || 
+                       tags.access === 'customers' || tags.landuse === 'military' || tags.dog === 'no' ||
+                       tags.admission || (tags.leisure === 'garden' && tags.tourism) ||
+                       (tags.tourism === 'attraction' && tags.leisure === 'garden') ||
+                       (tags.name && tags.name.toLowerCase().includes('botanical')) ||
+                       (tags.name && tags.name.toLowerCase().includes('vandusen')) ||
+                       (tags.tourism === 'zoo') || (tags.tourism === 'museum') || (tags.tourism === 'theme_park');
+            });
+            
+            for (const element of osmData.elements) {
+                if (element.type === 'way' && element.geometry && element.geometry.length >= 2) {
+                    const tags = element.tags || {};
+                    
+                    // Skip restricted elements
+                    const isRestrictedElement = tags.fee === 'yes' || tags.access === 'private' || 
+                                              tags.access === 'no' || tags.access === 'customers' ||
+                                              tags.landuse === 'military' || tags.dog === 'no';
+                    
+                    if (isRestrictedElement) continue;
+                    
+                    // Skip paths near restricted areas (VanDusen fix)
+                    const isNearRestrictedArea = checkIfPathNearRestrictedAreas(element, restrictedAreas);
+                    if (isNearRestrictedArea) continue;
+                    
+                    // Create polyline for this segment
+                    const coordinates = element.geometry.map(node => [node.lat, node.lon]);
+                    const segmentId = `segment_${element.id}`;
+                    
+                    // Determine segment type and color
+                    let color = '#94a3b8'; // Default gray (not walked)
+                    let weight = 4;
+                    let opacity = 0.8;
+                    
+                    if (walkedSegments.has(segmentId)) {
+                        // This segment has been "walked"
+                        if (tags.highway === 'footway' || tags.highway === 'path' || tags.highway === 'pedestrian') {
+                            color = '#22c55e'; // Green for paths/footways
+                        } else if (tags.highway && tags.highway.match(/^(primary|secondary|tertiary|residential)$/)) {
+                            color = '#3b82f6'; // Blue for roads
+                        } else if (tags.leisure === 'park') {
+                            color = '#10b981'; // Emerald for parks
+                        } else {
+                            color = '#8b5cf6'; // Purple for other walkable areas
+                        }
+                        weight = 6;
+                        opacity = 1.0;
+                    }
+                    
+                    const polyline = L.polyline(coordinates, {
+                        color: color,
+                        weight: weight,
+                        opacity: opacity,
+                        lineJoin: 'round',
+                        lineCap: 'round'
+                    });
+                    
+                    // Add click handler to mark as walked
+                    polyline.on('click', () => {
+                        markSegmentAsWalked(segmentId, polyline, tags);
+                    });
+                    
+                    // Add tooltip
+                    const name = tags.name || tags.highway || 'Unnamed segment';
+                    const walked = walkedSegments.has(segmentId) ? ' (WALKED)' : ' (click to mark as walked)';
+                    polyline.bindTooltip(`${name}${walked}`, {
+                        sticky: true,
+                        direction: 'top'
+                    });
+                    
+                    polyline.addTo(map);
+                    segmentLayers.push(polyline);
+                    segmentCount++;
+                }
+            }
+            
+            console.log(`✅ Rendered ${segmentCount} walkable segments`);
+            updateSegmentStats();
+        }
+
+        // Mark a segment as walked and update visualization
+        function markSegmentAsWalked(segmentId, polyline, tags) {
+            if (walkedSegments.has(segmentId)) {
+                // Unmark as walked
+                walkedSegments.delete(segmentId);
+                polyline.setStyle({
+                    color: '#94a3b8', // Gray
+                    weight: 4,
+                    opacity: 0.8
+                });
+                console.log(`❌ Unmarked segment: ${tags.name || tags.highway || 'unnamed'}`);
+            } else {
+                // Mark as walked
+                walkedSegments.add(segmentId);
+                
+                // Set color based on type
+                let color = '#8b5cf6'; // Default purple
+                if (tags.highway === 'footway' || tags.highway === 'path' || tags.highway === 'pedestrian') {
+                    color = '#22c55e'; // Green for paths
+                } else if (tags.highway && tags.highway.match(/^(primary|secondary|tertiary|residential)$/)) {
+                    color = '#3b82f6'; // Blue for roads
+                } else if (tags.leisure === 'park') {
+                    color = '#10b981'; // Emerald for parks
+                }
+                
+                polyline.setStyle({
+                    color: color,
+                    weight: 6,
+                    opacity: 1.0
+                });
+                console.log(`✅ Marked segment as walked: ${tags.name || tags.highway || 'unnamed'}`);
+            }
+            
+            // Update tooltip
+            const name = tags.name || tags.highway || 'Unnamed segment';
+            const walked = walkedSegments.has(segmentId) ? ' (WALKED)' : ' (click to mark as walked)';
+            polyline.setTooltipContent(`${name}${walked}`);
+            
+            updateSegmentStats();
+        }
+
+        // Update segment statistics
+        function updateSegmentStats() {
+            const totalSegments = segmentLayers.length;
+            const walkedCount = walkedSegments.size;
+            const percentage = totalSegments > 0 ? ((walkedCount / totalSegments) * 100).toFixed(1) : 0;
+            
+            console.log(`📊 Segment Progress: ${walkedCount}/${totalSegments} segments walked (${percentage}%)`);
+            
+            // Update UI if we have a stats div
+            const statsDiv = document.querySelector('.stats');
+            if (statsDiv && segmentMode) {
+                statsDiv.innerHTML = `
+                    <div><strong>Segment Coverage:</strong> ${walkedCount}/${totalSegments} segments (${percentage}%)</div>
+                    <div><strong>Mode:</strong> Strava-style segment tracking</div>
+                    <div><strong>Click segments to mark as walked!</strong></div>
+                `;
+            }
+        }
+
+        // Clear all segment overlays
+        function clearSegmentOverlays() {
+            segmentLayers.forEach(layer => {
+                map.removeLayer(layer);
+            });
+            segmentLayers = [];
         }
 
         // Keyboard shortcuts for easier testing
