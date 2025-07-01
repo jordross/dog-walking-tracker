@@ -774,19 +774,23 @@ Longitude: Like -74.0060 (East/West)`;
                 // Check if this grid cell intersects with any walkable areas
                 const isWalkable = checkPointInWalkableAreas(cellLat, cellLng, osmData.elements);
                 
-                // Check for restricted areas first
+                // Check for restricted areas
                 const isRestricted = checkPointInRestrictedAreas(cellLat, cellLng, osmData.elements);
                 
-                if (isRestricted) {
-                    cell.dataset.state = 'restricted';
-                    cell.className = 'grid-cell restricted';
-                    cell.title = `Cell ${row},${col} - restricted (auto-detected)`;
-                    classifiedCount++;
-                } else if (isWalkable) {
+                // PRIORITY: Walkable areas take precedence over restricted areas
+                // If there's any public walkable access, the cell is considered walkable
+                if (isWalkable) {
                     cell.dataset.state = 'walkable';
                     cell.className = 'grid-cell walkable';
                     cell.title = `Cell ${row},${col} - walkable (auto-detected)`;
                     classifiedCount++;
+                    console.log(`Cell ${row},${col} marked as WALKABLE at ${cellLat.toFixed(6)}, ${cellLng.toFixed(6)}`);
+                } else if (isRestricted) {
+                    cell.dataset.state = 'restricted';
+                    cell.className = 'grid-cell restricted';
+                    cell.title = `Cell ${row},${col} - restricted (auto-detected)`;
+                    classifiedCount++;
+                    console.log(`Cell ${row},${col} marked as RESTRICTED at ${cellLat.toFixed(6)}, ${cellLng.toFixed(6)}`);
                 } else {
                     cell.dataset.state = 'non-walkable';
                     cell.className = 'grid-cell non-walkable';
@@ -849,11 +853,13 @@ Longitude: Like -74.0060 (East/West)`;
                         (tags.tourism === 'theme_park');
                     
                     if (isRestrictedElement) {
+                        console.log(`Found restricted element: ${tags.name || 'Unnamed'} with tags:`, tags);
                         // Check proximity to restricted areas
                         for (const node of element.geometry) {
                             const distance = calculateDistance(pointLat, pointLng, node.lat, node.lon);
                             // If within 15 meters of a restricted area, consider it restricted
                             if (distance < 15) {
+                                console.log(`Point ${pointLat.toFixed(6)}, ${pointLng.toFixed(6)} is ${distance.toFixed(1)}m from restricted area: ${tags.name || 'Unnamed'}`);
                                 return true;
                             }
                         }
@@ -918,6 +924,7 @@ Longitude: Like -74.0060 (East/West)`;
                   
                   // Customer-only areas
                   way["access"="customers"](around:${radius},${lat},${lng});
+                  rel["access"="customers"](around:${radius},${lat},${lng});
                   
                   // Military or restricted areas
                   way["landuse"="military"](around:${radius},${lat},${lng});
