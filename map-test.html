@@ -4226,12 +4226,13 @@ Longitude: Like -74.0060 (East/West)`;
             console.log(`🔗 Debug mode: Created ${debugConnectionLines.length} connection visualizations`);
         }
 
-        // Modified version of buildSmartConnectionGraph that adds debug visualization
+                 // Modified version of buildSmartConnectionGraph that adds debug visualization
         function buildSmartConnectionGraphWithDebug(polylines) {
             const graph = new Map();
             const tolerance = 0.0002; // ~22 meters tolerance for endpoint connections
             
             console.log(`🔧 Building DEBUG connection graph with ${(tolerance * 111000).toFixed(1)}m tolerance`);
+            console.log(`🔧 Checking both endpoint proximity AND segment intersections...`);
             
             // Create nodes for all endpoints
             polylines.forEach((polyline, index) => {
@@ -4266,7 +4267,8 @@ Longitude: Like -74.0060 (East/West)`;
             
             // Find connections between nearby endpoints
             const nodes = Array.from(graph.entries());
-            let connectionCount = 0;
+            let endpointConnectionCount = 0;
+            let intersectionConnectionCount = 0;
             
             for (let i = 0; i < nodes.length; i++) {
                 for (let j = i + 1; j < nodes.length; j++) {
@@ -4282,7 +4284,7 @@ Longitude: Like -74.0060 (East/West)`;
                         // Connect these endpoints
                         nodeA.connections.push(keyB);
                         nodeB.connections.push(keyA);
-                        connectionCount++;
+                        endpointConnectionCount++;
                         
                         console.log(`✅ Connected endpoints ${distance.toFixed(1)}m apart`);
                         
@@ -4300,7 +4302,7 @@ Longitude: Like -74.0060 (East/West)`;
                             }).addTo(map);
                             
                             // Add tooltip showing connection details
-                            debugLine.bindTooltip(`🔗 Connection<br/>Distance: ${distance.toFixed(1)}m<br/>Tolerance: ${(tolerance * 111000).toFixed(1)}m`, {
+                            debugLine.bindTooltip(`🔗 Endpoint Connection<br/>Distance: ${distance.toFixed(1)}m<br/>Tolerance: ${(tolerance * 111000).toFixed(1)}m`, {
                                 sticky: true,
                                 direction: 'center',
                                 opacity: 0.9
@@ -4312,10 +4314,163 @@ Longitude: Like -74.0060 (East/West)`;
                 }
             }
             
-            console.log(`🔧 Created ${graph.size} endpoint nodes with ${connectionCount} connections (${(tolerance * 111000).toFixed(1)}m tolerance)`);
-            console.log(`🔗 Added ${debugConnectionLines.length} debug connection lines to map`);
+            // NEW: Also check for segment intersections (overlapping segments)
+            console.log(`🔧 Checking for segment intersections between ${polylines.length} polylines...`);
+            
+            for (let i = 0; i < polylines.length; i++) {
+                for (let j = i + 1; j < polylines.length; j++) {
+                    const polylineA = polylines[i];
+                    const polylineB = polylines[j];
+                    
+                    // Check if these two polylines intersect
+                    const intersection = findSegmentIntersection(polylineA, polylineB, tolerance);
+                    
+                    if (intersection) {
+                        // Create a connection through the intersection point
+                        const intersectionKey = `${intersection.lat.toFixed(6)},${intersection.lng.toFixed(6)}`;
+                        
+                        // Add intersection node if it doesn't exist
+                        if (!graph.has(intersectionKey)) {
+                            graph.set(intersectionKey, {
+                                lat: intersection.lat,
+                                lng: intersection.lng,
+                                connections: [],
+                                segmentIndices: [i, j],
+                                isIntersection: true
+                            });
+                        }
+                        
+                        // Connect the intersection to endpoints of both segments
+                        const latLngsA = polylineA.getLatLngs();
+                        const latLngsB = polylineB.getLatLngs();
+                        
+                        const startKeyA = `${latLngsA[0].lat.toFixed(6)},${latLngsA[0].lng.toFixed(6)}`;
+                        const endKeyA = `${latLngsA[latLngsA.length - 1].lat.toFixed(6)},${latLngsA[latLngsA.length - 1].lng.toFixed(6)}`;
+                        const startKeyB = `${latLngsB[0].lat.toFixed(6)},${latLngsB[0].lng.toFixed(6)}`;
+                        const endKeyB = `${latLngsB[latLngsB.length - 1].lat.toFixed(6)},${latLngsB[latLngsB.length - 1].lng.toFixed(6)}`;
+                        
+                        // Connect intersection to all relevant endpoints
+                        const intersectionNode = graph.get(intersectionKey);
+                        [startKeyA, endKeyA, startKeyB, endKeyB].forEach(endpointKey => {
+                            if (graph.has(endpointKey) && !intersectionNode.connections.includes(endpointKey)) {
+                                intersectionNode.connections.push(endpointKey);
+                                graph.get(endpointKey).connections.push(intersectionKey);
+                            }
+                        });
+                        
+                        intersectionConnectionCount++;
+                        console.log(`🎯 Found intersection between segments ${i} and ${j} at ${intersection.lat.toFixed(6)}, ${intersection.lng.toFixed(6)}`);
+                        
+                        // ADD DEBUG VISUALIZATION FOR INTERSECTIONS
+                        if (debugConnectionsMode) {
+                            // Show intersection point as a circle
+                            const intersectionMarker = L.circleMarker([intersection.lat, intersection.lng], {
+                                color: '#f59e0b', // Orange for intersections
+                                fillColor: '#f59e0b',
+                                fillOpacity: 0.8,
+                                radius: 8,
+                                weight: 3
+                            }).addTo(map);
+                            
+                            intersectionMarker.bindTooltip(`🎯 Intersection<br/>Segments: ${i} & ${j}<br/>Connects overlapping roads`, {
+                                sticky: true,
+                                direction: 'center',
+                                opacity: 0.9
+                            });
+                            
+                            debugConnectionLines.push(intersectionMarker);
+                        }
+                    }
+                }
+            }
+            
+            console.log(`🔧 Created ${graph.size} total nodes with ${endpointConnectionCount} endpoint connections and ${intersectionConnectionCount} intersection connections`);
+            console.log(`🔗 Added ${debugConnectionLines.length} debug visualizations to map`);
             
             return graph;
+        }
+
+        // Find intersection point between two polylines
+        function findSegmentIntersection(polylineA, polylineB, tolerance) {
+            const latLngsA = polylineA.getLatLngs();
+            const latLngsB = polylineB.getLatLngs();
+            
+            // Check each segment of polylineA against each segment of polylineB
+            for (let i = 0; i < latLngsA.length - 1; i++) {
+                for (let j = 0; j < latLngsB.length - 1; j++) {
+                    const segA1 = latLngsA[i];
+                    const segA2 = latLngsA[i + 1];
+                    const segB1 = latLngsB[j];
+                    const segB2 = latLngsB[j + 1];
+                    
+                    const intersection = lineIntersection(
+                        segA1.lat, segA1.lng, segA2.lat, segA2.lng,
+                        segB1.lat, segB1.lng, segB2.lat, segB2.lng
+                    );
+                    
+                    if (intersection) {
+                        // Check if intersection is close enough to both segments
+                        const distToA = distanceToLineSegment(intersection.lat, intersection.lng, segA1.lat, segA1.lng, segA2.lat, segA2.lng);
+                        const distToB = distanceToLineSegment(intersection.lat, intersection.lng, segB1.lat, segB1.lng, segB2.lat, segB2.lng);
+                        
+                        if (distToA <= tolerance * 111000 && distToB <= tolerance * 111000) {
+                            return intersection;
+                        }
+                    }
+                }
+            }
+            
+            return null;
+        }
+
+        // Calculate intersection point of two line segments
+        function lineIntersection(x1, y1, x2, y2, x3, y3, x4, y4) {
+            const denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+            if (Math.abs(denom) < 1e-10) return null; // Lines are parallel
+            
+            const t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom;
+            const u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / denom;
+            
+            if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
+                return {
+                    lat: x1 + t * (x2 - x1),
+                    lng: y1 + t * (y2 - y1)
+                };
+            }
+            
+            return null;
+        }
+
+        // Calculate distance from point to line segment
+        function distanceToLineSegment(px, py, x1, y1, x2, y2) {
+            const A = px - x1;
+            const B = py - y1;
+            const C = x2 - x1;
+            const D = y2 - y1;
+            
+            const dot = A * C + B * D;
+            const lenSq = C * C + D * D;
+            let param = -1;
+            
+            if (lenSq !== 0) {
+                param = dot / lenSq;
+            }
+            
+            let xx, yy;
+            if (param < 0) {
+                xx = x1;
+                yy = y1;
+            } else if (param > 1) {
+                xx = x2;
+                yy = y2;
+            } else {
+                xx = x1 + param * C;
+                yy = y1 + param * D;
+            }
+            
+            const dx = px - xx;
+            const dy = py - yy;
+            return Math.sqrt(dx * dx + dy * dy) * 111000; // Convert to meters
         }
 
     </script>
