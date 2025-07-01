@@ -178,6 +178,29 @@ body {
     font-size: var(--font-size-lg);
 }
 
+/* Development Link Styling */
+.dev-link {
+    background: var(--gray-100);
+    border: 1px dashed var(--gray-400);
+    opacity: 0.8;
+}
+
+.dev-link:hover {
+    background: var(--gray-200);
+    color: var(--gray-700);
+    opacity: 1;
+}
+
+.dev-badge {
+    background: var(--warning-color);
+    color: white;
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 10px;
+    font-weight: 700;
+    margin-left: 4px;
+}
+
 /* Main Content */
 .main-content {
     flex: 1;

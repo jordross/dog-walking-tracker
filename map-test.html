@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Walkable Areas Grid Test</title>
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
         * {
             margin: 0;
@@ -336,6 +338,8 @@
         </div>
     </div>
 
+    <!-- Leaflet JavaScript -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
         let map = null;
         let gridCells = [];
@@ -456,51 +460,40 @@ Longitude: Like -74.0060 (East/West)`;
                 return;
             }
 
-            // For this test, we'll create a simple visual representation
-            // In the real app, this would integrate with Mapbox or Google Maps
+            // Clear the map div and create a new map
             const mapDiv = document.getElementById('map');
-            mapDiv.innerHTML = `
-                <div style="
-                    width: 100%; 
-                    height: 100%; 
-                    background: linear-gradient(45deg, #e5f3ff 25%, transparent 25%), 
-                                linear-gradient(-45deg, #e5f3ff 25%, transparent 25%), 
-                                linear-gradient(45deg, transparent 75%, #e5f3ff 75%), 
-                                linear-gradient(-45deg, transparent 75%, #e5f3ff 75%);
-                    background-size: 30px 30px;
-                    background-position: 0 0, 0 15px, 15px -15px, -15px 0px;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    color: #374151;
-                    font-weight: 500;
-                    position: relative;
-                ">
-                    <div style="
-                        background: white;
-                        padding: 20px 28px;
-                        border-radius: 12px;
-                        box-shadow: 0 8px 16px rgba(0,0,0,0.15);
-                        text-align: center;
-                        border: 3px solid #4f46e5;
-                        max-width: 300px;
-                    ">
-                        <div style="font-size: 32px; margin-bottom: 8px;">🗺️</div>
-                        <div style="font-size: 16px; margin-bottom: 8px;">Map loaded for</div>
-                        <div style="font-size: 18px; font-weight: 700; color: #4f46e5; margin-bottom: 8px;">
-                            ${lat.toFixed(4)}, ${lng.toFixed(4)}
-                        </div>
-                        <div style="font-size: 14px; color: #6b7280;">
-                            Radius: ${document.getElementById('radius').value}m
-                        </div>
-                        <div style="font-size: 12px; color: #9ca3af; margin-top: 8px;">
-                            Click "Generate Grid" to start testing
-                        </div>
-                    </div>
-                </div>
-            `;
+            mapDiv.innerHTML = '';
+            
+            // Destroy existing map if it exists
+            if (map !== null) {
+                map.remove();
+                map = null;
+            }
 
-            console.log(`Map loaded for coordinates: ${lat}, ${lng}`);
+            // Create new Leaflet map
+            map = L.map('map').setView([lat, lng], 16);
+
+            // Add OpenStreetMap tiles
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            }).addTo(map);
+
+            // Add a marker at the center location
+            L.marker([lat, lng])
+                .addTo(map)
+                .bindPopup(`📍 Your Location<br>${lat.toFixed(4)}, ${lng.toFixed(4)}`)
+                .openPopup();
+
+            // Add a circle to show the radius
+            const radius = parseInt(document.getElementById('radius').value);
+            L.circle([lat, lng], {
+                color: '#4f46e5',
+                fillColor: '#4f46e5',
+                fillOpacity: 0.1,
+                radius: radius
+            }).addTo(map).bindPopup(`Search radius: ${radius}m`);
+
+            console.log(`Real map loaded for coordinates: ${lat}, ${lng} with ${radius}m radius`);
         }
 
         function generateGrid() {
