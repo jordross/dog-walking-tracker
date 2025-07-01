@@ -2878,6 +2878,8 @@ Longitude: Like -74.0060 (East/West)`;
         
         let blockFillLayers = []; // Store completed block polygons
         const MAX_ACTIVE_BLOCKS = 20; // Limit for performance
+        let totalCompletedArea = 0; // Track total area of completed blocks (m²)
+        let estimatedTotalArea = 0; // Estimated total walkable area in radius
         
         // Check for completed blocks after each segment completion
         function checkBlockCompletion() {
@@ -3349,8 +3351,12 @@ Longitude: Like -74.0060 (East/West)`;
             
             // Use actual polygon shape if available, otherwise fall back to rectangle
             if (block.isActualShape && block.polygon) {
-                // Simplify polygon to reduce rendering complexity
-                polygonCoords = simplifyPolygon(block.polygon.map(point => [point.lat, point.lng]), 0.00001);
+                // Use full polygon for better visibility (less simplification)
+                polygonCoords = block.polygon.map(point => [point.lat, point.lng]);
+                // Only simplify if polygon is very complex (>20 points)
+                if (polygonCoords.length > 20) {
+                    polygonCoords = simplifyPolygon(polygonCoords, 0.00005);
+                }
             } else if (block.bounds) {
                 // Fallback to rectangle for legacy blocks
                 const bounds = block.bounds;
@@ -3366,32 +3372,53 @@ Longitude: Like -74.0060 (East/West)`;
                 return;
             }
             
-            // Create a semi-transparent filled polygon following the actual block shape
+            // Create a more visible filled polygon
             const blockPolygon = L.polygon(polygonCoords, {
-                color: '#10b981', // Emerald border
+                color: '#059669', // Darker emerald border for visibility
                 fillColor: '#10b981', // Emerald fill
-                fillOpacity: 0.3, // Semi-transparent
-                weight: 2, // Thinner border for performance
-                opacity: 0.7, // Slightly less opaque border
-                smoothFactor: 1.5, // Simplify rendering
-                interactive: false // Disable interactions for performance
+                fillOpacity: 0.4, // More opaque for visibility
+                weight: 3, // Thicker border for visibility
+                opacity: 0.9, // More opaque border
+                dashArray: '5, 5' // Dashed pattern to show completion
             });
             
-            // Add tooltip showing block completion (but only on hover to save memory)
-            const areaText = block.area ? `~${Math.round(block.area)}m²` : 'Unknown area';
-            blockPolygon.bindTooltip(`🎉 Block Complete! ${areaText}`, {
-                sticky: false,
+            // Calculate area and add persistent label
+            const areaM2 = Math.round(block.area || 0);
+            const center = getPolygonCenter(polygonCoords);
+            
+            // Create a permanent label showing the area
+            const areaLabel = L.marker(center, {
+                icon: L.divIcon({
+                    className: 'block-area-label',
+                    html: `<div style="background: rgba(16, 185, 129, 0.9); color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size: 11px; text-align: center; border: 1px solid #059669;">${areaM2}m²</div>`,
+                    iconSize: [60, 20],
+                    iconAnchor: [30, 10]
+                }),
+                interactive: false
+            });
+            
+            // Add tooltip for more details
+            blockPolygon.bindTooltip(`🎉 Completed Block!<br/>Area: ${areaM2}m²<br/>Shape: ${block.isActualShape ? 'Actual' : 'Rectangle'}`, {
+                sticky: true,
                 direction: 'center',
                 opacity: 0.9
             });
             
+            // Add both polygon and label to map
             blockPolygon.addTo(map);
-            blockFillLayers.push(blockPolygon);
+            areaLabel.addTo(map);
             
-            console.log(`✅ Filled completed block: ${block.id} (${block.isActualShape ? 'Simplified' : 'Rectangular'})`);
+            // Store both for cleanup
+            blockFillLayers.push(blockPolygon);
+            blockFillLayers.push(areaLabel);
+            
+            // Track total completed area
+            totalCompletedArea += areaM2;
+            
+            console.log(`✅ Filled completed block: ${block.id}, ${areaM2}m² (Total: ${totalCompletedArea}m²)`);
             
             // Update statistics
-            updateSegmentStats();
+            updateBlockAreaStats();
         }
         
         // Clear all completed block overlays
@@ -3401,6 +3428,9 @@ Longitude: Like -74.0060 (East/West)`;
             });
             blockFillLayers = [];
             completedBlocks.clear();
+            totalCompletedArea = 0; // Reset area tracking
+            updateBlockAreaStats(); // Update display
+            console.log('🗑️ Cleared all completed blocks and reset area tracking');
         }
         
         // Modified click handler to check for block completion
@@ -3509,6 +3539,46 @@ Longitude: Like -74.0060 (East/West)`;
             const C = x2 * y1 - x1 * y2;
             
             return Math.abs(A * px + B * py + C) / Math.sqrt(A * A + B * B);
+        }
+        
+        // Get the center point of a polygon
+        function getPolygonCenter(coords) {
+            let lat = 0, lng = 0;
+            for (const coord of coords) {
+                lat += coord[0];
+                lng += coord[1];
+            }
+            return [lat / coords.length, lng / coords.length];
+        }
+        
+        // Update block area statistics and display
+        function updateBlockAreaStats() {
+            const completedBlocks = blockFillLayers.length / 2; // Divide by 2 because we store both polygon and label
+            const radius = getRadiusFromInput();
+            
+            // Estimate total area (rough calculation based on circular area)
+            const circleAreaM2 = Math.PI * radius * radius;
+            estimatedTotalArea = circleAreaM2 * 0.6; // ~60% of circle is typically walkable blocks
+            
+            const completionPercentage = estimatedTotalArea > 0 ? (totalCompletedArea / estimatedTotalArea * 100).toFixed(1) : 0;
+            
+            // Update the segment stats display with area information
+            const statsDisplay = document.getElementById('segmentStats');
+            if (statsDisplay) {
+                const segmentCount = Array.from(walkedSegments.entries()).filter(([id, data]) => data.completed).length;
+                const totalSegments = segmentLayers.length;
+                const segmentPercentage = totalSegments > 0 ? (segmentCount / totalSegments * 100).toFixed(1) : 0;
+                
+                statsDisplay.innerHTML = `
+                    <strong>📊 Progress:</strong><br/>
+                    🛣️ Segments: ${segmentCount}/${totalSegments} (${segmentPercentage}%)<br/>
+                    🏘️ Blocks: ${completedBlocks} completed<br/>
+                    📐 Area: ${totalCompletedArea.toLocaleString()}m² / ~${estimatedTotalArea.toLocaleString()}m² (${completionPercentage}%)<br/>
+                    🎯 Coverage: ${completionPercentage}% of neighborhood explored
+                `;
+            }
+            
+            console.log(`📊 Area Stats: ${totalCompletedArea}m² completed (${completionPercentage}% of ~${estimatedTotalArea}m² total)`);
         }
 
     </script>
