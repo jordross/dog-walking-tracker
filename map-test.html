@@ -281,6 +281,7 @@
             <button onclick="loadMap()">🗺️ Load Map</button>
             <button onclick="generateGrid()">⬜ Generate Grid</button>
             <button onclick="autoDetectWalkable()" id="autoDetectBtn">🤖 Auto-Detect Walkable Areas</button>
+            <button onclick="showRestrictedAreas()" id="restrictedBtn">🚫 Show Restricted Areas</button>
             <button onclick="clearGrid()">🧹 Clear Grid</button>
         </div>
 
@@ -660,22 +661,22 @@ Longitude: Like -74.0060 (East/West)`;
         async function queryWalkableAreas(lat, lng, radius) {
             const overpassUrl = 'https://overpass-api.de/api/interpreter';
             
-            // Overpass query for walkable areas
+            // Enhanced Overpass query for walkable areas with access restrictions
             const query = `
                 [out:json][timeout:25];
                 (
-                  // Roads and highways (walkable)
-                  way["highway"~"^(primary|secondary|tertiary|residential|unclassified|service|footway|path|pedestrian|cycleway)$"](around:${radius},${lat},${lng});
+                  // Roads and highways (walkable, not private)
+                  way["highway"~"^(primary|secondary|tertiary|residential|unclassified|service|footway|path|pedestrian|cycleway)$"]["access"!="private"]["access"!="no"](around:${radius},${lat},${lng});
                   
                   // Sidewalks specifically  
-                  way["footway"="sidewalk"](around:${radius},${lat},${lng});
+                  way["footway"="sidewalk"]["access"!="private"](around:${radius},${lat},${lng});
                   
-                  // Parks and recreational areas
-                  way["leisure"~"^(park|playground|recreation_ground|garden)$"](around:${radius},${lat},${lng});
-                  rel["leisure"~"^(park|playground|recreation_ground|garden)$"](around:${radius},${lat},${lng});
+                  // Parks and recreational areas (exclude fee-based and private)
+                  way["leisure"~"^(park|playground|recreation_ground|garden)$"]["access"!="private"]["fee"!="yes"](around:${radius},${lat},${lng});
+                  rel["leisure"~"^(park|playground|recreation_ground|garden)$"]["access"!="private"]["fee"!="yes"](around:${radius},${lat},${lng});
                   
-                  // Public paths and trails
-                  way["highway"="track"]["access"!="private"](around:${radius},${lat},${lng});
+                  // Public paths and trails (explicitly exclude private)
+                  way["highway"="track"]["access"!="private"]["access"!="no"](around:${radius},${lat},${lng});
                 );
                 out geom;
             `;
@@ -763,6 +764,128 @@ Longitude: Like -74.0060 (East/West)`;
                 }
             }
             return false;
+        }
+
+        // Show restricted areas that are excluded from walkable detection
+        async function showRestrictedAreas() {
+            if (!map) {
+                alert('Please load the map first!');
+                return;
+            }
+
+            const button = document.getElementById('restrictedBtn');
+            const originalText = button.textContent;
+            button.textContent = '🔍 Finding restrictions...';
+            button.disabled = true;
+
+            try {
+                const center = map.getCenter();
+                const radius = parseInt(document.getElementById('radius').value);
+                
+                // Query for restricted areas
+                const restrictedData = await queryRestrictedAreas(center.lat, center.lng, radius);
+                
+                if (restrictedData && restrictedData.elements && restrictedData.elements.length > 0) {
+                    displayRestrictedAreasInfo(restrictedData.elements);
+                    button.textContent = '✅ Restrictions found!';
+                } else {
+                    alert('No specifically tagged restricted areas found in this area.\n\nThis could mean:\n• Area has good public access\n• OSM data may not have detailed access tags\n• Your pay-to-enter garden might not be tagged with fee=yes');
+                    button.textContent = '🤷 No restrictions found';
+                }
+                
+            } catch (error) {
+                console.error('Error finding restricted areas:', error);
+                button.textContent = '❌ Query failed';
+            }
+            
+            setTimeout(() => {
+                button.textContent = originalText;
+                button.disabled = false;
+            }, 3000);
+        }
+
+        // Query OpenStreetMap for restricted/fee-based areas
+        async function queryRestrictedAreas(lat, lng, radius) {
+            const overpassUrl = 'https://overpass-api.de/api/interpreter';
+            
+            const query = `
+                [out:json][timeout:25];
+                (
+                  // Fee-based areas (like your pay-to-enter garden)
+                  way["fee"="yes"](around:${radius},${lat},${lng});
+                  rel["fee"="yes"](around:${radius},${lat},${lng});
+                  
+                  // Private access areas
+                  way["access"="private"](around:${radius},${lat},${lng});
+                  way["access"="no"](around:${radius},${lat},${lng});
+                  
+                  // Customer-only areas
+                  way["access"="customers"](around:${radius},${lat},${lng});
+                  
+                  // Military or restricted areas
+                  way["landuse"="military"](around:${radius},${lat},${lng});
+                  
+                  // Dog-restricted areas
+                  way["dog"="no"](around:${radius},${lat},${lng});
+                );
+                out geom;
+            `;
+
+            try {
+                const response = await fetch(overpassUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: 'data=' + encodeURIComponent(query)
+                });
+
+                const data = await response.json();
+                console.log('Restricted areas data:', data.elements?.length || 0, 'elements');
+                return data;
+                
+            } catch (error) {
+                console.error('Error querying restricted areas:', error);
+                return null;
+            }
+        }
+
+        // Display information about restricted areas found
+        function displayRestrictedAreasInfo(restrictedElements) {
+            let restrictionTypes = {};
+            
+            restrictedElements.forEach(element => {
+                const tags = element.tags || {};
+                
+                if (tags.fee === 'yes') {
+                    restrictionTypes['Fee-based (pay-to-enter)'] = (restrictionTypes['Fee-based (pay-to-enter)'] || 0) + 1;
+                }
+                if (tags.access === 'private') {
+                    restrictionTypes['Private access'] = (restrictionTypes['Private access'] || 0) + 1;
+                }
+                if (tags.access === 'no') {
+                    restrictionTypes['No access'] = (restrictionTypes['No access'] || 0) + 1;
+                }
+                if (tags.access === 'customers') {
+                    restrictionTypes['Customers only'] = (restrictionTypes['Customers only'] || 0) + 1;
+                }
+                if (tags.landuse === 'military') {
+                    restrictionTypes['Military/restricted'] = (restrictionTypes['Military/restricted'] || 0) + 1;
+                }
+                if (tags.dog === 'no') {
+                    restrictionTypes['No dogs allowed'] = (restrictionTypes['No dogs allowed'] || 0) + 1;
+                }
+            });
+            
+            let message = `🚫 Found ${restrictedElements.length} restricted areas:\n\n`;
+            
+            for (const [type, count] of Object.entries(restrictionTypes)) {
+                message += `• ${type}: ${count}\n`;
+            }
+            
+            message += `\n💡 These areas are excluded from walkable detection because they have access restrictions that matter for everyday dog walking.`;
+            
+            alert(message);
         }
 
         // Calculate distance between two points in meters using Haversine formula
