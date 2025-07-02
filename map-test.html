@@ -3887,34 +3887,43 @@ Longitude: Like -74.0060 (East/West)`;
             return isValid;
         }
         
-        // Calculate polygon area using shoelace formula
+        // Calculate polygon area using simple coordinate conversion + shoelace formula
         function calculatePolygonArea(polygon) {
             if (polygon.length < 3) return 0;
             
-            let area = 0;
-            const earthRadius = 6371000; // Earth radius in meters
+            // Get first point as reference
+            const firstPoint = polygon[0];
+            const refLat = Array.isArray(firstPoint) ? firstPoint[0] : firstPoint.lat;
+            const refLng = Array.isArray(firstPoint) ? firstPoint[1] : firstPoint.lng;
             
-            for (let i = 0; i < polygon.length - 1; i++) {
-                const p1 = polygon[i];
-                const p2 = polygon[i + 1];
+            console.log(`🔧 Area calculation for ${polygon.length} points, reference: (${refLat.toFixed(6)}, ${refLng.toFixed(6)})`);
+            
+            // Convert all points to meters relative to reference point
+            const meterCoords = [];
+            for (let i = 0; i < polygon.length; i++) {
+                const point = polygon[i];
+                const lat = Array.isArray(point) ? point[0] : point.lat;
+                const lng = Array.isArray(point) ? point[1] : point.lng;
                 
-                // Handle both array format [lat, lng] and object format {lat, lng}
-                const lat1 = Array.isArray(p1) ? p1[0] : p1.lat;
-                const lng1 = Array.isArray(p1) ? p1[1] : p1.lng;
-                const lat2 = Array.isArray(p2) ? p2[0] : p2.lat;
-                const lng2 = Array.isArray(p2) ? p2[1] : p2.lng;
+                // Simple conversion: degrees to meters
+                const x = (lng - refLng) * 111000 * Math.cos(refLat * Math.PI / 180);
+                const y = (lat - refLat) * 111000;
                 
-                // Convert to approximate meters for area calculation
-                const lat1Rad = lat1 * Math.PI / 180;
-                const lat2Rad = lat2 * Math.PI / 180;
-                const lng1Rad = lng1 * Math.PI / 180;
-                const lng2Rad = lng2 * Math.PI / 180;
-                
-                area += (lng2Rad - lng1Rad) * (2 + Math.sin(lat1Rad) + Math.sin(lat2Rad));
+                meterCoords.push([x, y]);
             }
             
-            area = Math.abs(area * earthRadius * earthRadius / 2);
-            return area;
+            // Shoelace formula on meter coordinates
+            let area = 0;
+            for (let i = 0; i < meterCoords.length; i++) {
+                const j = (i + 1) % meterCoords.length;
+                area += meterCoords[i][0] * meterCoords[j][1];
+                area -= meterCoords[j][0] * meterCoords[i][1];
+            }
+            
+            const finalArea = Math.abs(area) / 2;
+            console.log(`🔧 Converted coords to meters, shoelace result: ${finalArea.toFixed(0)}m²`);
+            
+            return finalArea;
         }
         
         // Fill a completed block with color using actual polygon shape
