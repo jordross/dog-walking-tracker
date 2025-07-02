@@ -4575,11 +4575,11 @@ Longitude: Like -74.0060 (East/West)`;
             return Math.sqrt(dx * dx + dy * dy) * 111000; // Convert to meters
         }
 
-        // SIMPLIFIED geometric approach: Find enclosed areas using intersection points
+        // SMART rectangular block detection: Find city blocks using spatial relationships
         function findEnhancedClosedLoops(graph, polylines) {
             const loops = [];
             
-            console.log(`🔧 Starting GEOMETRIC block detection with ${graph.size} nodes...`);
+            console.log(`🔧 Starting SMART rectangular block detection with ${graph.size} nodes...`);
             
             // Get all intersection nodes (ignore regular endpoints for now)
             const intersectionNodes = Array.from(graph.entries()).filter(([key, node]) => 
@@ -4599,48 +4599,306 @@ Longitude: Like -74.0060 (East/West)`;
                 console.log(`🔧 Now working with ${workingNodes.length} total nodes (${intersectionNodes.length} intersections + ${workingNodes.length - intersectionNodes.length} endpoints)`);
             }
             
-            // Try to find rectangular/polygonal areas enclosed by these nodes
-            for (let i = 0; i < workingNodes.length; i++) {
-                for (let j = i + 1; j < workingNodes.length; j++) {
-                    for (let k = j + 1; k < workingNodes.length; k++) {
-                        for (let l = k + 1; l < workingNodes.length; l++) {
-                            // Try combinations of 4 points (most city blocks are roughly rectangular)
-                            const candidates = [
-                                workingNodes[i][1], // node data
-                                workingNodes[j][1],
-                                workingNodes[k][1], 
-                                workingNodes[l][1]
-                            ];
-                            
-                            // Check if these 4 points could form a reasonable city block
-                            const blockCandidate = tryFormBlock(candidates);
-                            
-                            if (blockCandidate) {
-                                const area = calculatePolygonArea(blockCandidate);
-                                console.log(`🔧 Geometric block candidate: ${area.toFixed(0)}m²`);
-                                
-                                // Store for debugging
-                                const blockInfo = {
-                                    polygon: blockCandidate,
-                                    area: area,
-                                    intersectionNodes: 4,
-                                    valid: area >= 500 && area <= 100000,
-                                    method: 'geometric'
-                                };
-                                allDetectedBlocks.push(blockInfo);
-                                
-                                if (area >= 500 && area <= 100000) {
-                                    loops.push(blockCandidate);
-                                    console.log(`✅ Found valid geometric block: ${area.toFixed(0)}m²`);
-                                }
-                            }
+            // SMART APPROACH: Look for rectangular patterns instead of brute-force combinations
+            const detectedBlocks = findRectangularBlocks(workingNodes);
+            
+            console.log(`🔧 Smart detection found ${detectedBlocks.length} rectangular block candidates`);
+            
+            // Process each detected block
+            for (const blockCandidate of detectedBlocks) {
+                const area = calculatePolygonArea(blockCandidate);
+                console.log(`🔧 Rectangular block candidate: ${area.toFixed(0)}m²`);
+                
+                // Store for debugging
+                const blockInfo = {
+                    polygon: blockCandidate,
+                    area: area,
+                    intersectionNodes: 4,
+                    valid: area >= 500 && area <= 100000,
+                    method: 'smart-rectangular'
+                };
+                allDetectedBlocks.push(blockInfo);
+                
+                if (area >= 500 && area <= 100000) {
+                    loops.push(blockCandidate);
+                    console.log(`✅ Found valid rectangular block: ${area.toFixed(0)}m²`);
+                }
+            }
+            
+            console.log(`🔧 Smart rectangular detection found ${loops.length} valid blocks`);
+            return loops;
+        }
+        
+        // Smart function to find rectangular blocks using spatial relationships
+        function findRectangularBlocks(workingNodes) {
+            const blocks = [];
+            console.log(`🧠 Starting smart rectangular block detection with ${workingNodes.length} nodes`);
+            
+            // Convert nodes to simpler format for processing
+            const nodes = workingNodes.map(([key, node]) => ({
+                key: key,
+                lat: node.lat,
+                lng: node.lng,
+                connections: node.connections
+            }));
+            
+            console.log(`🧠 Processing ${nodes.length} nodes for rectangular patterns...`);
+            
+            // For each node, look for rectangular patterns by finding nodes in cardinal directions
+            for (let i = 0; i < nodes.length; i++) {
+                const centerNode = nodes[i];
+                
+                // Find nodes that could form a rectangle with this center node
+                const rectangularGroups = findRectangularGroup(centerNode, nodes);
+                
+                for (const group of rectangularGroups) {
+                    if (group.length === 4) {
+                        // Convert to coordinate format and sort clockwise
+                        const coords = group.map(node => [node.lat, node.lng]);
+                        const sortedCoords = sortPointsClockwise(coords);
+                        
+                        // Validate this forms a reasonable city block
+                        if (isValidCityBlock(group)) {
+                            blocks.push(sortedCoords);
+                            console.log(`🧠 Found rectangular block with nodes: ${group.map(n => n.key).join(', ')}`);
                         }
                     }
                 }
             }
             
-            console.log(`🔧 Geometric detection found ${loops.length} valid blocks`);
-            return loops;
+            // Remove duplicate blocks (same coordinates)
+            const uniqueBlocks = removeDuplicateBlocks(blocks);
+            console.log(`🧠 Found ${uniqueBlocks.length} unique rectangular blocks`);
+            
+            return uniqueBlocks;
+        }
+        
+        // Find nodes that could form a rectangle with the given center node
+        function findRectangularGroup(centerNode, allNodes) {
+            const groups = [];
+            const maxDistance = 300; // Maximum distance for city block (meters)
+            const minDistance = 50;  // Minimum distance for city block (meters)
+            
+            // Find all nodes within reasonable distance
+            const nearbyNodes = allNodes.filter(node => {
+                if (node.key === centerNode.key) return false;
+                
+                const distance = calculateDistance(
+                    centerNode.lat, centerNode.lng,
+                    node.lat, node.lng
+                );
+                return distance >= minDistance && distance <= maxDistance;
+            });
+            
+            console.log(`🧠 Found ${nearbyNodes.length} nearby nodes for center ${centerNode.key}`);
+            
+            // Look for rectangular patterns using direction-based approach
+            const rectangularCandidates = findRectangularPattern(centerNode, nearbyNodes);
+            
+            if (rectangularCandidates.length > 0) {
+                groups.push(...rectangularCandidates);
+            }
+            
+            return groups;
+        }
+        
+        // Find rectangular patterns using cardinal directions
+        function findRectangularPattern(centerNode, nearbyNodes) {
+            const patterns = [];
+            
+            // Group nodes by approximate direction from center
+            const nodesByDirection = groupNodesByDirection(centerNode, nearbyNodes);
+            
+            console.log(`🧠 Grouped nodes by direction:`, {
+                north: nodesByDirection.north.length,
+                south: nodesByDirection.south.length,
+                east: nodesByDirection.east.length,
+                west: nodesByDirection.west.length
+            });
+            
+            // Try to form rectangles using nodes from opposite directions
+            const northSouthPairs = findOppositeDirectionPairs(nodesByDirection.north, nodesByDirection.south, centerNode);
+            const eastWestPairs = findOppositeDirectionPairs(nodesByDirection.east, nodesByDirection.west, centerNode);
+            
+            // Combine north-south and east-west pairs to form rectangles
+            for (const nsPair of northSouthPairs) {
+                for (const ewPair of eastWestPairs) {
+                    const rectangle = [centerNode, ...nsPair, ...ewPair];
+                    
+                    // Validate the rectangle geometry
+                    if (isValidRectangleGeometry(rectangle)) {
+                        patterns.push(rectangle);
+                        console.log(`🧠 Found valid rectangular pattern`);
+                    }
+                }
+            }
+            
+            return patterns;
+        }
+        
+        // Group nodes by their direction relative to center node
+        function groupNodesByDirection(centerNode, nodes) {
+            const groups = {
+                north: [],
+                south: [],
+                east: [],
+                west: []
+            };
+            
+            const tolerance = 0.3; // Angular tolerance for direction classification
+            
+            for (const node of nodes) {
+                const deltaLat = node.lat - centerNode.lat;
+                const deltaLng = node.lng - centerNode.lng;
+                
+                // Use angle to determine primary direction
+                const angle = Math.atan2(deltaLat, deltaLng);
+                const normalizedAngle = ((angle + 2 * Math.PI) % (2 * Math.PI));
+                
+                // Classify into cardinal directions with tolerance
+                if (normalizedAngle >= (Math.PI/2 - tolerance) && normalizedAngle <= (Math.PI/2 + tolerance)) {
+                    groups.north.push(node);
+                } else if (normalizedAngle >= (3*Math.PI/2 - tolerance) && normalizedAngle <= (3*Math.PI/2 + tolerance)) {
+                    groups.south.push(node);
+                } else if (normalizedAngle >= -tolerance && normalizedAngle <= tolerance) {
+                    groups.east.push(node);
+                } else if (normalizedAngle >= (Math.PI - tolerance) && normalizedAngle <= (Math.PI + tolerance)) {
+                    groups.west.push(node);
+                }
+            }
+            
+            return groups;
+        }
+        
+        // Find pairs of nodes in opposite directions that could form rectangle sides
+        function findOppositeDirectionPairs(direction1Nodes, direction2Nodes, centerNode) {
+            const pairs = [];
+            const maxDistanceDiff = 50; // Maximum difference in distances from center (meters)
+            
+            for (const node1 of direction1Nodes) {
+                const dist1 = calculateDistance(centerNode.lat, centerNode.lng, node1.lat, node1.lng);
+                
+                for (const node2 of direction2Nodes) {
+                    const dist2 = calculateDistance(centerNode.lat, centerNode.lng, node2.lat, node2.lng);
+                    
+                    // Check if distances are similar (indicating potential rectangle)
+                    if (Math.abs(dist1 - dist2) <= maxDistanceDiff) {
+                        pairs.push([node1, node2]);
+                    }
+                }
+            }
+            
+            return pairs;
+        }
+        
+        // Validate that 4 nodes form a reasonable rectangle geometry
+        function isValidRectangleGeometry(nodes) {
+            if (nodes.length !== 4) return false;
+            
+            // Calculate all pairwise distances
+            const distances = [];
+            for (let i = 0; i < 4; i++) {
+                for (let j = i + 1; j < 4; j++) {
+                    const dist = calculateDistance(
+                        nodes[i].lat, nodes[i].lng,
+                        nodes[j].lat, nodes[j].lng
+                    );
+                    distances.push(dist);
+                }
+            }
+            
+            // For a rectangle, we should have 2 pairs of equal sides + 2 diagonals
+            distances.sort((a, b) => a - b);
+            
+            const tolerance = 20; // meters tolerance for side equality
+            
+            // Check if we have approximately equal sides
+            const side1 = distances[0];
+            const side2 = distances[1];
+            const side3 = distances[2];
+            const side4 = distances[3];
+            const diagonal1 = distances[4];
+            const diagonal2 = distances[5];
+            
+            // Check for rectangular pattern (2 pairs of equal sides)
+            const hasEqualSides = (
+                Math.abs(side1 - side3) <= tolerance && // Two sides equal
+                Math.abs(side2 - side4) <= tolerance && // Other two sides equal
+                Math.abs(diagonal1 - diagonal2) <= tolerance // Diagonals equal
+            );
+            
+            return hasEqualSides;
+        }
+        
+        // Validate that nodes form a reasonable city block
+        function isValidCityBlock(nodes) {
+            // Check distances between all pairs
+            const distances = [];
+            for (let i = 0; i < nodes.length; i++) {
+                for (let j = i + 1; j < nodes.length; j++) {
+                    const dist = calculateDistance(
+                        nodes[i].lat, nodes[i].lng,
+                        nodes[j].lat, nodes[j].lng
+                    );
+                    distances.push(dist);
+                }
+            }
+            
+            const maxDist = Math.max(...distances);
+            const minDist = Math.min(...distances);
+            
+            // Reasonable city block dimensions
+            return maxDist <= 500 && minDist >= 30;
+        }
+        
+        // Remove duplicate blocks (same coordinates within tolerance)
+        function removeDuplicateBlocks(blocks) {
+            const unique = [];
+            const tolerance = 0.0001; // Coordinate tolerance for duplicates
+            
+            for (const block of blocks) {
+                let isDuplicate = false;
+                
+                for (const existingBlock of unique) {
+                    if (areBlocksEqual(block, existingBlock, tolerance)) {
+                        isDuplicate = true;
+                        break;
+                    }
+                }
+                
+                if (!isDuplicate) {
+                    unique.push(block);
+                }
+            }
+            
+            return unique;
+        }
+        
+        // Check if two blocks are the same (within tolerance)
+        function areBlocksEqual(block1, block2, tolerance) {
+            if (block1.length !== block2.length) return false;
+            
+            // Try different starting points and rotations to account for different orderings
+            for (let offset = 0; offset < block1.length; offset++) {
+                let isEqual = true;
+                
+                for (let i = 0; i < block1.length; i++) {
+                    const idx1 = i;
+                    const idx2 = (i + offset) % block2.length;
+                    
+                    const latDiff = Math.abs(block1[idx1][0] - block2[idx2][0]);
+                    const lngDiff = Math.abs(block1[idx1][1] - block2[idx2][1]);
+                    
+                    if (latDiff > tolerance || lngDiff > tolerance) {
+                        isEqual = false;
+                        break;
+                    }
+                }
+                
+                if (isEqual) return true;
+            }
+            
+            return false;
         }
         
         // Try to form a reasonable city block from 4 intersection points
