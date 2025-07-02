@@ -4371,12 +4371,18 @@ Longitude: Like -74.0060 (East/West)`;
                     );
                     
                     if (distance <= tolerance * 111000) {
-                        // Connect these endpoints
+                        // PRIORITIZE INTERSECTIONS: Skip endpoint connections if either node has intersection connections
+                        if (nodeA.hasIntersectionConnection || nodeB.hasIntersectionConnection) {
+                            console.log(`⏭️ Skipping endpoint connection (${distance.toFixed(1)}m) - nodes have intersection connections`);
+                            continue;
+                        }
+                        
+                        // Connect these endpoints only if no intersection connections exist
                         nodeA.connections.push(keyB);
                         nodeB.connections.push(keyA);
                         endpointConnectionCount++;
                         
-                        console.log(`✅ Connected endpoints ${distance.toFixed(1)}m apart`);
+                        console.log(`✅ Connected endpoints ${distance.toFixed(1)}m apart (no intersections)`);
                         
                         // ADD DEBUG VISUALIZATION HERE
                         if (debugConnectionsMode) {
@@ -4445,6 +4451,9 @@ Longitude: Like -74.0060 (East/West)`;
                             if (graph.has(endpointKey) && !intersectionNode.connections.includes(endpointKey)) {
                                 intersectionNode.connections.push(endpointKey);
                                 graph.get(endpointKey).connections.push(intersectionKey);
+                                
+                                // Mark this endpoint as having an intersection connection
+                                graph.get(endpointKey).hasIntersectionConnection = true;
                             }
                         });
                         
