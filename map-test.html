@@ -4434,6 +4434,9 @@ Longitude: Like -74.0060 (East/West)`;
                                 segmentIndices: [i, j],
                                 isIntersection: true
                             });
+                        } else {
+                            // Mark existing node as intersection
+                            graph.get(intersectionKey).isIntersection = true;
                         }
                         
                         // Connect the intersection to endpoints of both segments
@@ -4585,17 +4588,28 @@ Longitude: Like -74.0060 (East/West)`;
             
             console.log(`🔧 Found ${intersectionNodes.length} intersection nodes to work with`);
             
-            // Try to find rectangular/polygonal areas enclosed by these intersections
-            for (let i = 0; i < intersectionNodes.length; i++) {
-                for (let j = i + 1; j < intersectionNodes.length; j++) {
-                    for (let k = j + 1; k < intersectionNodes.length; k++) {
-                        for (let l = k + 1; l < intersectionNodes.length; l++) {
-                            // Try combinations of 4 intersection points (most city blocks are roughly rectangular)
+            // If we have very few intersections, include well-connected regular nodes as backup
+            let workingNodes = intersectionNodes;
+            if (intersectionNodes.length < 4) {
+                console.log(`⚠️ Only ${intersectionNodes.length} intersections - adding well-connected endpoint nodes`);
+                const endpointNodes = Array.from(graph.entries()).filter(([key, node]) => 
+                    !node.isIntersection && node.connections.length >= 2
+                );
+                workingNodes = [...intersectionNodes, ...endpointNodes.slice(0, 8)]; // Limit to avoid too many combinations
+                console.log(`🔧 Now working with ${workingNodes.length} total nodes (${intersectionNodes.length} intersections + ${workingNodes.length - intersectionNodes.length} endpoints)`);
+            }
+            
+            // Try to find rectangular/polygonal areas enclosed by these nodes
+            for (let i = 0; i < workingNodes.length; i++) {
+                for (let j = i + 1; j < workingNodes.length; j++) {
+                    for (let k = j + 1; k < workingNodes.length; k++) {
+                        for (let l = k + 1; l < workingNodes.length; l++) {
+                            // Try combinations of 4 points (most city blocks are roughly rectangular)
                             const candidates = [
-                                intersectionNodes[i][1], // node data
-                                intersectionNodes[j][1],
-                                intersectionNodes[k][1], 
-                                intersectionNodes[l][1]
+                                workingNodes[i][1], // node data
+                                workingNodes[j][1],
+                                workingNodes[k][1], 
+                                workingNodes[l][1]
                             ];
                             
                             // Check if these 4 points could form a reasonable city block
