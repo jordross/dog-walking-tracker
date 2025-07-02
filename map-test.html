@@ -4694,6 +4694,26 @@ Longitude: Like -74.0060 (East/West)`;
             }
             
             console.log(`🔧 Full polygon built with ${fullPolygon.length} total coordinates`);
+            
+            // DEBUG: Log the actual polygon bounds to check for issues
+            if (fullPolygon.length > 0) {
+                const lats = fullPolygon.map(coord => coord[0]);
+                const lngs = fullPolygon.map(coord => coord[1]);
+                const minLat = Math.min(...lats);
+                const maxLat = Math.max(...lats);
+                const minLng = Math.min(...lngs);
+                const maxLng = Math.max(...lngs);
+                
+                const latSpan = (maxLat - minLat) * 111000; // Convert to meters
+                const lngSpan = (maxLng - minLng) * 111000 * Math.cos(minLat * Math.PI / 180);
+                
+                console.log(`📐 Polygon bounds: ${latSpan.toFixed(0)}m × ${lngSpan.toFixed(0)}m`);
+                
+                if (latSpan > 1000 || lngSpan > 1000) {
+                    console.log(`⚠️ WARNING: Polygon spans ${latSpan.toFixed(0)}m × ${lngSpan.toFixed(0)}m - likely too large for a city block!`);
+                }
+            }
+            
             return fullPolygon.length >= 3 ? fullPolygon : null;
         }
 
