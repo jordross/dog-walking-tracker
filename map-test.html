@@ -4744,38 +4744,61 @@ Longitude: Like -74.0060 (East/West)`;
             return null;
         }
 
-        // Get coordinates along a segment between two specific points
+        // Get coordinates along a segment between two specific points (FIXED VERSION)
         function getCoordinatesBetweenPoints(polyline, pointA, pointB) {
             const coords = polyline.getLatLngs();
             const tolerance = 0.0002 * 111000; // ~22 meters
             
+            console.log(`🔧 Tracing segment between (${pointA.lat.toFixed(6)}, ${pointA.lng.toFixed(6)}) and (${pointB.lat.toFixed(6)}, ${pointB.lng.toFixed(6)})`);
+            
+            // Instead of finding segment endpoints, find the CLOSEST points on the segment to our intersection points
             let startIndex = -1;
             let endIndex = -1;
+            let minDistToA = Infinity;
+            let minDistToB = Infinity;
             
-            // Find the indices closest to pointA and pointB
+            // Find the coordinates on the segment that are closest to our intersection points
             for (let i = 0; i < coords.length; i++) {
                 const coord = coords[i];
                 
                 const distToA = calculateDistance(pointA.lat, pointA.lng, coord.lat, coord.lng);
                 const distToB = calculateDistance(pointB.lat, pointB.lng, coord.lat, coord.lng);
                 
-                if (distToA <= tolerance && startIndex === -1) {
+                // Track the closest point to A
+                if (distToA < minDistToA) {
+                    minDistToA = distToA;
                     startIndex = i;
                 }
-                if (distToB <= tolerance) {
+                
+                // Track the closest point to B
+                if (distToB < minDistToB) {
+                    minDistToB = distToB;
                     endIndex = i;
                 }
             }
             
+            console.log(`🔧 Closest points: A at index ${startIndex} (${minDistToA.toFixed(1)}m away), B at index ${endIndex} (${minDistToB.toFixed(1)}m away)`);
+            
             if (startIndex !== -1 && endIndex !== -1 && startIndex !== endIndex) {
-                // Extract coordinates between the two points
+                // Extract coordinates between the two closest points
                 const start = Math.min(startIndex, endIndex);
                 const end = Math.max(startIndex, endIndex);
                 
-                return coords.slice(start, end + 1).map(coord => [coord.lat, coord.lng]);
+                const segmentCoords = coords.slice(start, end + 1).map(coord => [coord.lat, coord.lng]);
+                
+                // CRITICAL FIX: Replace the first and last coordinates with the EXACT intersection points
+                // This ensures we're using intersection boundaries, not segment endpoints
+                if (segmentCoords.length > 0) {
+                    segmentCoords[0] = [pointA.lat, pointA.lng]; // Start at exact intersection
+                    segmentCoords[segmentCoords.length - 1] = [pointB.lat, pointB.lng]; // End at exact intersection
+                }
+                
+                console.log(`✅ Traced ${segmentCoords.length} coordinates from intersection to intersection`);
+                return segmentCoords;
             }
             
-            // Fallback: return just the two endpoint coordinates
+            // Fallback: return just the two intersection coordinates
+            console.log(`⚠️ Fallback: Using direct line between intersections`);
             return [[pointA.lat, pointA.lng], [pointB.lat, pointB.lng]];
         }
 
